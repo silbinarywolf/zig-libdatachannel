@@ -461,8 +461,11 @@ pub fn build(b: *std.Build) !void {
             // CFLAGS: -O2 in the makefile (ReleaseFast)
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
+            // load of misaligned address 0x16fb70be7 for type 'uint16_t' (aka 'unsigned short'), which requires 2 byte alignment
+            // src/stun.c:449:33: 0x101809b13 in stun_write_value_mapped_address
+            .sanitize_c = .off,
         });
-        mod.pic = true;
         mod.addCSourceFiles(.{
             .root = libjuice_path.path(b, "src"),
             .files = &libjuice_src_files,
@@ -474,7 +477,6 @@ pub fn build(b: *std.Build) !void {
         if (linkage == .static) {
             mod.addCMacro("JUICE_STATIC", "1");
         }
-        mod.pic = true;
         mod.addIncludePath(libjuice_path.path(b, "include/juice"));
         const lib = b.addLibrary(.{
             .name = "libjuice",
