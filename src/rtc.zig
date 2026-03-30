@@ -3,7 +3,6 @@
 
 const assert = @import("std").debug.assert;
 const bigToNative = @import("std").mem.bigToNative;
-const lockStderr = @import("std").debug.lockStderr;
 const maxInt = @import("std").math.maxInt;
 const nativeToBig = @import("std").mem.nativeToBig;
 const panic = @import("std").debug.panic;
@@ -14,6 +13,8 @@ const writeStackTrace = @import("std").debug.writeStackTrace;
 const builtin = @import("builtin");
 
 const clib = @import("clibdatachannel");
+
+const logrtc = @import("std").log.scoped(.libdatachannel);
 
 // Import for error handling logic
 /// From libdatachannel, IPv6 minimum guaranteed MTU
@@ -48,7 +49,6 @@ const BufferOrNotAvailableError = BufferError || error{
 
 /// defaultZigLogger can be used with "initLogger" to make libdatachannel use Zigs logger
 pub fn defaultZigLogger(log_level: LogLevel, message: [:0]const u8) void {
-    const logrtc = @import("std").log.scoped(.libdatachannel);
     switch (log_level) {
         .none => unreachable,
         .fatal => logrtc.err("{s}", .{message}),
@@ -783,20 +783,9 @@ pub fn Track(comptime T: type) type {
             //     return error_handler(pc, err, userdata);
             // }
 
-            // Default error handler attempts to close the connection and then panics
-            // tr.close() catch {};
-
-            // By default in Debug mode do a fancier "assert" if user does not have a custom error handler callback
-            if (builtin.mode == .Debug) {
-                if (@errorReturnTrace()) |trace| {
-                    const stderr = lockStderr(&.{}).terminal();
-                    writeStackTrace(trace, stderr) catch return;
-                    stderr.writer.print("unhandled error occurred with track({}): {s}\n", .{ tr, @errorName(err) }) catch {};
-                    process.exit(1);
-                } else {
-                    panic("unhandled error occurred with track({}): {s}\n", .{ tr, @errorName(err) });
-                }
-            }
+            // Close the track on error for non-debug
+            logrtc.err("unhandled error occurred with track({}): {s}", .{ tr, @errorName(err) });
+            tr.close() catch {};
         }
 
         const CTrack = @This();
@@ -869,20 +858,9 @@ pub fn PeerConnection(comptime T: type) type {
             //     return error_handler(@enumFromInt(pc.c()), err, userdata);
             // }
 
-            // // Default error handler attempts to close the connection and then panics
-            // pc.close() catch {};
-
-            // By default in Debug mode do a fancier "assert" if user does not have a custom error handler callback
-            if (builtin.mode == .Debug) {
-                if (@errorReturnTrace()) |trace| {
-                    const stderr = lockStderr(&.{}).terminal();
-                    writeStackTrace(trace, stderr) catch return;
-                    stderr.writer.print("unhandled error occurred with peer connection({}): {s}\n", .{ pc, @errorName(err) }) catch {};
-                    process.exit(1);
-                } else {
-                    panic("unhandled error occurred with peer connection({}): {s}\n", .{ pc, @errorName(err) });
-                }
-            }
+            // Close peer connection on error
+            logrtc.err("unhandled error occurred with peer connection({}): {s}", .{ pc, @errorName(err) });
+            pc.close() catch {};
         }
 
         const CreateType = if (T == void)
