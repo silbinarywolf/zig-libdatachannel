@@ -458,8 +458,16 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag != .emscripten) {
         const mod = b.createModule(.{
             .target = target,
+            // CFLAGS: -O2 in the makefile (ReleaseFast)
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
+            // NOTE(jae): 2026-03-30 - https://github.com/silbinarywolf/zig-libdatachannel/issues/2
+            // Disable santization of C for Mac-like operating systems running on ARM
+            //
+            // load of misaligned address 0x16fb70be7 for type 'uint16_t' (aka 'unsigned short'), which requires 2 byte alignment
+            // src/stun.c:449:33: 0x101809b13 in stun_write_value_mapped_address
+            .sanitize_c = if (target.result.os.tag.isDarwin() and target.result.cpu.arch.isAARCH64()) .off else null,
         });
         mod.addCSourceFiles(.{
             .root = libjuice_path.path(b, "src"),
@@ -472,7 +480,10 @@ pub fn build(b: *std.Build) !void {
         if (linkage == .static) {
             mod.addCMacro("JUICE_STATIC", "1");
         }
-        mod.pic = true;
+        if (target.result.os.tag.isDarwin()) {
+            // Configured for MacOS builds of libjuice in Github CI for libjuice
+            mod.addCMacro("JUICE_ENABLE_LOCAL_ADDRESS_TRANSLATION", "1");
+        }
         mod.addIncludePath(libjuice_path.path(b, "include/juice"));
         const lib = b.addLibrary(.{
             .name = "libjuice",
