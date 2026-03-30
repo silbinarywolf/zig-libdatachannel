@@ -467,7 +467,7 @@ pub fn build(b: *std.Build) !void {
             //
             // load of misaligned address 0x16fb70be7 for type 'uint16_t' (aka 'unsigned short'), which requires 2 byte alignment
             // src/stun.c:449:33: 0x101809b13 in stun_write_value_mapped_address
-            .sanitize_c = if (target.result.os.tag.isDarwin() and target.result.cpu.arch.isAARCH64()) .off else null,
+            // .sanitize_c = if (target.result.os.tag.isDarwin() and target.result.cpu.arch.isAARCH64()) .off else null,
         });
         mod.addCSourceFiles(.{
             .root = libjuice_path.path(b, "src"),
@@ -479,6 +479,10 @@ pub fn build(b: *std.Build) !void {
         mod.addCMacro("JUICE_EXPORTS", "1");
         if (linkage == .static) {
             mod.addCMacro("JUICE_STATIC", "1");
+        }
+        if (target.result.os.tag.isDarwin()) {
+            // Configured for MacOS builds of libjuice
+            mod.addCMacro("JUICE_ENABLE_LOCAL_ADDRESS_TRANSLATION", "1");
         }
         mod.addIncludePath(libjuice_path.path(b, "include/juice"));
         const lib = b.addLibrary(.{
