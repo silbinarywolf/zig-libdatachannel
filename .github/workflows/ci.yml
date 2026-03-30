@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_ZIG_STABLE_VERSION: "0.15.2"
+  # TODO: Change to 0.16.0 when it is stable, for now use nightly
+  CI_ZIG_STABLE_VERSION: "master"
 
 jobs:
   # NOTE(jae): 2026-02-01

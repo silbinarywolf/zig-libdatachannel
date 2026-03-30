@@ -2,6 +2,7 @@
 const Allocator = @import("std").mem.Allocator;
 const mem = @import("std").mem;
 const testing = @import("std").testing;
+const builtin = @import("builtin");
 
 const rtc = @import("libdatachannel");
 
@@ -134,7 +135,12 @@ test "capi track" {
         while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
             attempts -= 1;
 
-            try testing.io.sleep(.fromMilliseconds(250), .boot);
+            if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
+                // Deprecated path: Zig 0.15.X or lower
+                @import("std").Thread.sleep(250 * 1000000);
+            } else {
+                try testing.io.sleep(.fromMilliseconds(250), .boot);
+            }
         }
         if (peer1.state != .connected or peer2.state != .connected) {
             return error.PeerConnectionIsNotConnected;

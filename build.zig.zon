@@ -2,6 +2,7 @@
     .name = .libdatachannel,
     .version = "0.0.0",
     .fingerprint = 0x6a2facd3f4914512,
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         // Dependencies
         // - GnuTLS, Mbed TLS, or OpenSSL
