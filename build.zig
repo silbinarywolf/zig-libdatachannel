@@ -467,7 +467,7 @@ pub fn build(b: *std.Build) !void {
             //
             // load of misaligned address 0x16fb70be7 for type 'uint16_t' (aka 'unsigned short'), which requires 2 byte alignment
             // src/stun.c:449:33: 0x101809b13 in stun_write_value_mapped_address
-            .sanitize_c = if (target.result.os.tag.isDarwin() and target.result.cpu.arch.isArm()) .off else null,
+            .sanitize_c = if (target.result.os.tag.isDarwin() and target.result.cpu.arch.isAARCH64()) .off else null,
         });
         mod.addCSourceFiles(.{
             .root = libjuice_path.path(b, "src"),
