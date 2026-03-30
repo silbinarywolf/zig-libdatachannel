@@ -29,8 +29,9 @@
             .hash = "N-V-__8AAH8JWAAnLo1IhGB_xM7Gds4eXGoF64rFChCefjNr",
         },
         .libjuice = .{
-            .url = "git+https://github.com/paullouisageneau/libjuice#v1.7.0",
-            .hash = "N-V-__8AAO5aCABg0eiA7mYoWbc0OrgGqh8XIm5aWpOZSIes",
+            // Latest master (roughly 4 commits since 1.7.0)
+            .url = "git+https://github.com/paullouisageneau/libjuice#24441ecd73d6ef37624b4c6c8a2cdb15c985c17e",
+            .hash = "N-V-__8AAAdbCADIDurO8Hf8xzlIRxwKxtZIWLBg7y4ZGS9n",
         },
         .libsrtp = .{
             .url = "git+https://github.com/cisco/libsrtp#v2.7.0",

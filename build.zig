@@ -458,9 +458,11 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag != .emscripten) {
         const mod = b.createModule(.{
             .target = target,
+            // CFLAGS: -O2 in the makefile (ReleaseFast)
             .optimize = optimize,
             .link_libc = true,
         });
+        mod.pic = true;
         mod.addCSourceFiles(.{
             .root = libjuice_path.path(b, "src"),
             .files = &libjuice_src_files,
