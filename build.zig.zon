@@ -1,0 +1,61 @@
+.{
+    .name = .libdatachannel,
+    .version = "0.0.0",
+    .fingerprint = 0x6a2facd3f4914512,
+    .dependencies = .{
+        // Dependencies
+        // - GnuTLS, Mbed TLS, or OpenSSL
+        // - usrsctp (as submodule by default)
+        // - plog (as submodule by default)
+        // - libjuice (as submodule by default) or libnice as an ICE backend.
+        // - libsrtp (as submodule by default) required if compiled with media support.
+        // - nlohmann JSON (as submodule by default) required to build examples.
+        .libdatachannel_cpp = .{
+            .url = "git+https://github.com/paullouisageneau/libdatachannel#082f2dacabe82c1ef970ba38e596aeb454ea1372",
+            .hash = "N-V-__8AAPcmOAMvwMkbynYXuLPXyHwpDyPDxmrXRdeFk8fu",
+        },
+        .libdatachannel_wasm = .{
+            .url = "git+https://github.com/paullouisageneau/datachannel-wasm#v0.4.0",
+            .hash = "N-V-__8AAKpQAQDhq9ILQ8f9maaKe-ayGZjNRgzWHZaWIqlr",
+            .lazy = true,
+        },
+        .plog = .{
+            .url = "git+https://github.com/SergiusTheBest/plog#1.1.11",
+            .hash = "N-V-__8AAPR7DQBzNOu797YiL87Xb_svp_gzXOYZVJy--Ixp",
+        },
+        .usrsctp = .{
+            .url = "git+https://github.com/sctplab/usrsctp#fd070e05a7474f38c7fecdf4d4b6005d2547ee00",
+            .hash = "N-V-__8AAH8JWAAnLo1IhGB_xM7Gds4eXGoF64rFChCefjNr",
+        },
+        .libjuice = .{
+            .url = "git+https://github.com/paullouisageneau/libjuice#v1.7.0",
+            .hash = "N-V-__8AAO5aCABg0eiA7mYoWbc0OrgGqh8XIm5aWpOZSIes",
+        },
+        .libsrtp = .{
+            .url = "git+https://github.com/cisco/libsrtp#v2.7.0",
+            .hash = "N-V-__8AAH_0JgA-Cj0KD-FRD79YKfpke_jGj3tRLcggPbkf",
+        },
+        .mbedtls = .{
+            // NOTE(jae): 2026-03-16
+            // Use latest commit of mbedtls-3.6 branch that has Firefox DTLS handshake fix.
+            // Branch: https://github.com/Mbed-TLS/mbedtls/tree/mbedtls-3.6
+            // Issue: https://github.com/paullouisageneau/libdatachannel/issues/1520
+            .url = "git+https://github.com/Mbed-TLS/mbedtls#e24f1e5c2c321165327a544e2334d4ed06b317e7",
+            .hash = "N-V-__8AAC2JdgGk1QZ0JtMgz66B5s5rzNjQkloMXFw-jo86",
+            .lazy = true,
+        },
+        .openssl = .{
+            .url = "git+https://github.com/openssl/openssl#openssl-3.6.1",
+            .hash = "N-V-__8AAAv1CAhJkqQc7qnRDObIF2Pu-e8GVTOPDGSkn-9s",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "LICENSE",
+        "README.md",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "test",
+    },
+}

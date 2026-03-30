@@ -1,0 +1,25 @@
+/*
+!.gitignore
+
+# Dependency: libdatachannel
+!libdatachannel
+libdatachannel/*
+!libdatachannel/include
+!libdatachannel/src
+!libdatachannel/test
+libdatachannel/test/*
+!libdatachannel/test/*.cpp
+!libdatachannel/test/*.hpp
+!libdatachannel/LICENSE
+!libdatachannel/Makefile
+!libdatachannel/CMakeLists.txt
+
+# Dependency: mbedtls generated files - https://github.com/Mbed-TLS/mbedtls/blob/v3.6.5/library/.gitignore#L5-L11
+# 
+# NOTE(jae): 2026-03-13
+# We provide these so that mbedtls can easily switched to use a fork for bug-fixes.
+# ie. https://github.com/paullouisageneau/libdatachannel/issues/1520
+!mbedtls-gen
+
+# Dependency: openssl generated files - https://github.com/kassane/openssl-zig/tree/zig-pkg/include_gen
+!openssl-gen
