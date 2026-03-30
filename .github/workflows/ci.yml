@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  # Cancels pending runs when a PR gets updated.
+  group: ${{ github.head_ref || github.run_id }}-${{ github.actor }}
+  cancel-in-progress: true
+
+env:
+  CI_ZIG_STABLE_VERSION: "0.15.2"
+
+jobs:
+  # NOTE(jae): 2026-02-01
+  # Run a Zig format check before any other steps on latest Zig stable
+  format:
+    name: zig fmt --check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v2
+
+    # Run AST check
+    - name: AST Check
+      run: |
+        zig fmt --ast-check ./src
+
+    # Run format check
+    - name: Zig Format Check
+      run: zig fmt --check .
+
+  # https://stackoverflow.com/questions/73797254/environment-variables-in-github-actions
+  setup:
+    name: setup environment variables as outputs
+    needs: [format]
+    runs-on: ubuntu-latest
+    steps:
+       - run: echo "null"
+    outputs:
+      zig-stable-version: ${{ env.CI_ZIG_STABLE_VERSION }}
+
+  build-stable:
+    name: Build Zig Stable
+    needs: [setup]
+    runs-on: ${{matrix.os}}
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - os: "ubuntu-latest"
+          - os: "windows-latest"
+          - os: "macos-14" # arm64 as per table: https://github.com/actions/runner-images/blob/8a1eeaf6ac70c66f675a04078d1a7222edd42008/README.md#available-images
+ 
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: ${{ needs.setup.outputs.zig-stable-version }}
+
+    - name: Run Build
+      run: zig build
+
+    - name: Run Tests
+      run: zig build test
