@@ -19,7 +19,7 @@ const Peer = struct {
     fn init(peer: *Peer, config: rtc.PeerConnectionConfig) !void {
         // Create peer connection
         const pc = try rtc.PeerConnection(Peer).create(peer, config);
-        errdefer pc.destroy() catch unreachable;
+        errdefer pc.destroy();
         peer.* = .{
             .state = .new,
             .gatheringState = .new,
@@ -37,8 +37,8 @@ const Peer = struct {
     }
 
     fn deinit(peer: *Peer) void {
-        if (peer.tr.unwrap()) |tr| tr.close() catch unreachable;
-        peer.pc.close() catch unreachable;
+        if (peer.tr.unwrap()) |tr| tr.close();
+        peer.pc.close();
     }
 };
 

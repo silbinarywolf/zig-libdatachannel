@@ -618,18 +618,30 @@ pub fn Track(comptime T: type) type {
         /// Closes the track without removing it, unlike destroy()
         ///
         /// This does not block like destroy()
-        pub inline fn close(tr: CTrack) InvalidOrRuntimeError!void {
+        pub inline fn close(tr: CTrack) void {
             // NOTE(jae): 2026-03-15
             // rtcClose() = closes DataChannels, Tracks and WebSockets
-            return try handleWrapError(clib.rtcClose(tr.c()));
+            return handleWrapError(clib.rtcClose(tr.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid track id given: {}", .{tr});
+                },
+                else => unreachable,
+            };
         }
 
         /// Closes the track and removes it
         ///
         /// This function will block until all scheduled callbacks return
         /// (except the one this function might be called in) and no other callback will be called after it returns.
-        pub inline fn destroy(tr: CTrack) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcDeleteTrack(tr.c()));
+        pub inline fn destroy(tr: CTrack) void {
+            return handleWrapError(clib.rtcDeleteTrack(tr.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid track id given: {}", .{tr});
+                },
+                else => unreachable,
+            };
         }
 
         /// Set user pointer for track and change its user-pointer from the one it inherits from PeerConnection
@@ -785,7 +797,7 @@ pub fn Track(comptime T: type) type {
 
             // Close the track on error for non-debug
             logrtc.err("unhandled error occurred with track({}): {s}", .{ tr, @errorName(err) });
-            tr.close() catch {};
+            tr.close();
         }
 
         const CTrack = @This();
@@ -860,7 +872,7 @@ pub fn PeerConnection(comptime T: type) type {
 
             // Close peer connection on error
             logrtc.err("unhandled error occurred with peer connection({}): {s}", .{ pc, @errorName(err) });
-            pc.close() catch {};
+            pc.close();
         }
 
         const CreateType = if (T == void)
@@ -871,7 +883,7 @@ pub fn PeerConnection(comptime T: type) type {
         /// create
         pub fn create(userdata: CreateType, config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
             const pc = try createOpaque(config);
-            errdefer pc.destroy() catch unreachable;
+            errdefer pc.destroy();
             return switch (T) {
                 void => pc,
                 else => pc.internalSetUserPointer(T, userdata),
@@ -904,16 +916,28 @@ pub fn PeerConnection(comptime T: type) type {
         /// Closes the peer connection without removing it, unlike destroy()
         ///
         /// Unlike destroy(), this will not block until all the scheduled callbacks return
-        pub inline fn close(pc: TPeerConnection) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcClosePeerConnection(pc.c()));
+        pub inline fn close(pc: TPeerConnection) void {
+            return handleWrapError(clib.rtcClosePeerConnection(pc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid peer connection id given: {}", .{pc});
+                },
+                else => unreachable,
+            };
         }
 
         /// Closes the peer connection and removes it
         ///
         /// This function will block until all scheduled callbacks return
         /// (except the one this function might be called in) and no other callback will be called after it returns.
-        pub inline fn destroy(pc: TPeerConnection) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcDeletePeerConnection(pc.c()));
+        pub inline fn destroy(pc: TPeerConnection) void {
+            return handleWrapError(clib.rtcDeletePeerConnection(pc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid peer connection id given: {}", .{pc});
+                },
+                else => unreachable,
+            };
         }
 
         /// Set user pointer for PeerConnection(void) to give it a pointer-context.
@@ -988,6 +1012,11 @@ pub fn PeerConnection(comptime T: type) type {
         }
 
         pub inline fn getLocalDescription(pc: TPeerConnection, buf: []u8) BufferOrNotAvailableError![:0]u8 {
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), buf.ptr, @intCast(buf.len)));
+            return buf[0 .. size - 1 :0];
+        }
+
+        pub inline fn getRemoteDescription(pc: TPeerConnection, buf: []u8) BufferOrNotAvailableError![:0]u8 {
             const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), buf.ptr, @intCast(buf.len)));
             return buf[0 .. size - 1 :0];
         }
