@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_ZIG_STABLE_VERSION: "0.15.2"
+  CI_ZIG_STABLE_VERSION: "0.16.0"
 
 jobs:
   # NOTE(jae): 2026-02-01
