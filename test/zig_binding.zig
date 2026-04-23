@@ -10,7 +10,7 @@ const MediaDescription: [:0]const u8 = "video 9 UDP/TLS/RTP/SAVPF\r\n" ++
 test "PeerConnection void type promotion" {
     // Create PeerConnection with no user pointer (void)
     const vpc = try rtc.PeerConnection(void).create({}, .{});
-    defer vpc.destroy() catch unreachable;
+    defer vpc.destroy();
 
     // Update user pointer to new type
     var peer: PeerUserPointer = .{};
