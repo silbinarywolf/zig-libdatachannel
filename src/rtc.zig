@@ -594,6 +594,146 @@ pub const NackResponderConfig = struct {
     };
 };
 
+/// Returned from call to DataChannel.getReliability
+pub const DataChannelReliability = struct {
+    unordered: bool,
+    unreliable: bool,
+    maxPacketLifeTime: u32,
+    maxRetransmits: u32,
+};
+
+pub fn OptionalDataChannel(comptime T: type) type {
+    return enum(u32) {
+        none = maxInt(u32),
+        _,
+
+        pub inline fn unwrap(ot: @This()) ?DataChannel(T) {
+            if (ot == .none) return null;
+            return @enumFromInt(@intFromEnum(ot));
+        }
+
+        pub inline fn fromOptional(ot: ?DataChannel(T)) @This() {
+            return if (ot) |t| t.toOptional() else .none;
+        }
+    };
+}
+
+/// If both maxPacketLifeTime or maxRetransmits are unset (0), the channel is reliable.
+/// If has maxPacketLifeTime or maxRetransmits is set, the channel is unreliable.
+pub const DataChannelReliabilityConfig = union(enum) {
+    reliable: void,
+    /// Time window during which transmissions and retransmissions may occur
+    maxPacketLifeTime: u32,
+    /// Maximum number of retransmissions that are attempted
+    maxRetransmits: u32,
+};
+
+pub const DataChannelConfig = struct {
+    /// If true, the channel does not enforce message ordering and out-of-order delivery is allowed
+    unordered: bool = false,
+    /// If both maxPacketLifeTime or maxRetransmits are unset (0), the channel is reliable.
+    /// If has maxPacketLifeTime or maxRetransmits is set, the channel is unreliable.
+    reliability: DataChannelReliabilityConfig = .reliable,
+    protocol: ?[:0]const u8 = null,
+    negotiated: bool = false,
+    stream: ?u16 = null,
+};
+
+/// DataChannel implicitly inherits PeerConnection 'setUserPointer'
+pub fn DataChannel(comptime T: type) type {
+    return enum(u31) {
+        _,
+
+        /// Closes the data channel without removing it, unlike destroy()
+        ///
+        /// This does not block like destroy()
+        pub inline fn close(dc: CDataChannel) void {
+            // NOTE(jae): 2026-04-23
+            // rtcClose() = closes DataChannels, Tracks and WebSockets
+            return handleWrapError(clib.rtcClose(dc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid data channel id given: {}", .{dc});
+                },
+                else => unreachable,
+            };
+        }
+
+        /// Closes the data channel and removes it
+        ///
+        /// This function will block until all scheduled callbacks return
+        /// (except the one this function might be called in) and no other callback will be called after it returns.
+        pub inline fn destroy(dc: CDataChannel) void {
+            return handleWrapError(clib.rtcDeleteTrack(dc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid data channel id given: {}", .{dc});
+                },
+                else => unreachable,
+            };
+        }
+
+        /// Set user pointer for data channel and change its user-pointer from the one it inherits from PeerConnection
+        /// Returns newly typed Data Channel.
+        pub inline fn setUserPointer(dc: CDataChannel, comptime NT: type, userdata: *NT) DataChannel(NT) {
+            if (T == NT) @compileError("setUserPointer redundant call, setting to the type it already is");
+            clib.rtcSetUserPointer(dc.c(), userdata);
+            return @enumFromInt(@intFromEnum(dc));
+        }
+
+        pub inline fn getLabel(dc: CDataChannel, buf: []u8) BufferError![:0]u8 {
+            const size = try handleSizeWrapError(clib.rtcGetDataChannelLabel(dc.c(), buf.ptr, @intCast(buf.len)));
+            return buf[0 .. size - 1 :0];
+        }
+
+        /// Get the string name used for the sub-protocol used, for example, it could be "json", "raw" or any other user-defined string
+        pub inline fn getProtocol(dc: CDataChannel, buf: []u8) BufferError![:0]u8 {
+            const size = try handleSizeWrapError(clib.rtcGetDataChannelProtocol(dc.c(), buf.ptr, @intCast(buf.len)));
+            return buf[0 .. size - 1 :0];
+        }
+
+        pub inline fn getReliability(dc: CDataChannel) InvalidOrRuntimeError!DataChannelReliability {
+            var res: clib.rtcReliability = undefined;
+            try handleWrapError(clib.rtcGetDataChannelReliability(dc.c(), &res));
+            return DataChannelReliability{
+                .unordered = res.unordered,
+                .unreliable = res.unreliable,
+                .maxPacketLifeTime = res.maxPacketLifeTime,
+                .maxRetransmits = res.maxRetransmits,
+            };
+        }
+        pub const setOpenCallback = HandleCallback(CDataChannel, T).setOpenCallback;
+        pub const setClosedCallback = HandleCallback(CDataChannel, T).setClosedCallback;
+        pub const setMessageCallback = HandleCallback(CDataChannel, T).setMessageCallback;
+
+        inline fn c(dc: CDataChannel) u31 {
+            return @intFromEnum(dc);
+        }
+
+        inline fn fromC(dc: c_int) CDataChannel {
+            return @enumFromInt(dc);
+        }
+
+        inline fn toUserPointer(ptr: ?*anyopaque) *T {
+            return @ptrCast(@alignCast(ptr.?));
+        }
+
+        pub inline fn toOptional(tr: CDataChannel) OptionalDataChannel(T) {
+            return @enumFromInt(@intFromEnum(tr));
+        }
+
+        fn handleErrorResult(dc: CDataChannel, err: anyerror, _: *T) void {
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
+
+            // Close the data channel on error
+            logrtc.err("unhandled error occurred with data channel({}): {s}", .{ dc, @errorName(err) });
+            dc.close();
+        }
+
+        const CDataChannel = @This();
+    };
+}
+
 pub fn OptionalTrack(comptime T: type) type {
     return enum(u32) {
         none = maxInt(u32),
@@ -646,10 +786,10 @@ pub fn Track(comptime T: type) type {
 
         /// Set user pointer for track and change its user-pointer from the one it inherits from PeerConnection
         /// Returns newly typed Track.
-        pub inline fn setUserPointer(pc: CTrack, comptime NT: type, userdata: *NT) Track(NT) {
+        pub inline fn setUserPointer(tr: CTrack, comptime NT: type, userdata: *NT) Track(NT) {
             if (T == NT) @compileError("setUserPointer redundant call, setting to the type it already is");
-            clib.rtcSetUserPointer(pc.c(), userdata);
-            return @enumFromInt(@intFromEnum(pc));
+            clib.rtcSetUserPointer(tr.c(), userdata);
+            return @enumFromInt(@intFromEnum(tr));
         }
 
         /// Return media description for the video or audio track
@@ -728,54 +868,17 @@ pub fn Track(comptime T: type) type {
             return @enumFromInt(@intFromEnum(tr));
         }
 
-        pub fn setOpenCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    return callback(self, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetOpenCallback(tr.c(), Container.api_callback));
-        }
-
-        pub fn setClosedCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    return callback(self, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetClosedCallback(tr.c(), Container.api_callback));
-        }
+        pub const setOpenCallback = HandleCallback(CTrack, T).setOpenCallback;
+        pub const setClosedCallback = HandleCallback(CTrack, T).setClosedCallback;
+        pub const setMessageCallback = HandleCallback(CTrack, T).setMessageCallback;
 
         pub fn setErrorCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, error_message: [:0]const u8, userdata: *T) void) InvalidOrRuntimeError!void {
             const Container = struct {
-                pub fn api_callback(_track_id: c_int, _error: [*c]const u8, _userdata: ?*anyopaque) callconv(.c) void {
-                    return callback(.fromC(_track_id), fromConstCString(_error), @ptrCast(@alignCast(_userdata)));
+                pub fn api_callback(_id: c_int, _error: [*c]const u8, _userdata: ?*anyopaque) callconv(.c) void {
+                    return callback(.fromC(_id), fromConstCString(_error), @ptrCast(@alignCast(_userdata)));
                 }
             };
             return handleWrapError(clib.rtcSetErrorCallback(tr.c(), Container.api_callback));
-        }
-
-        pub fn setMessageCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    const msg: []const u8 = if (size < 0)
-                        // Negative size means null-terminated pointer
-                        @as([:0]const u8, _message[0..@intCast(-size) :0])
-                    else
-                        @as([]const u8, _message[0..@intCast(size)]);
-                    return callback(.fromC(_track_id), msg, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), Container.api_callback));
         }
 
         inline fn c(tr: CTrack) u31 {
@@ -795,7 +898,7 @@ pub fn Track(comptime T: type) type {
             //     return error_handler(pc, err, userdata);
             // }
 
-            // Close the track on error for non-debug
+            // Close the track on error
             logrtc.err("unhandled error occurred with track({}): {s}", .{ tr, @errorName(err) });
             tr.close();
         }
@@ -865,10 +968,7 @@ pub fn PeerConnection(comptime T: type) type {
         _,
 
         fn handleErrorResult(pc: TPeerConnection, err: anyerror, _: *T) void {
-            // TODO: Consider allowing custom global error handler
-            // if (Options.error_handler) |error_handler| {
-            //     return error_handler(@enumFromInt(pc.c()), err, userdata);
-            // }
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
 
             // Close peer connection on error
             logrtc.err("unhandled error occurred with peer connection({}): {s}", .{ pc, @errorName(err) });
@@ -880,7 +980,6 @@ pub fn PeerConnection(comptime T: type) type {
         else
             *T;
 
-        /// create
         pub fn create(userdata: CreateType, config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
             const pc = try createOpaque(config);
             errdefer pc.destroy();
@@ -890,7 +989,7 @@ pub fn PeerConnection(comptime T: type) type {
             };
         }
 
-        fn createOpaque(config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
+        inline fn createOpaque(config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
             const pc_c = try handleIdWrapError(clib.rtcCreatePeerConnection(&.{
                 // NOTE(jae): 2026-03-15
                 // Use const-casting since the given C strings are read-from + copied immediately and to improve
@@ -951,6 +1050,31 @@ pub fn PeerConnection(comptime T: type) type {
         pub inline fn internalSetUserPointer(pc: TPeerConnection, comptime NT: type, userdata: *NT) PeerConnection(NT) {
             clib.rtcSetUserPointer(pc.c(), userdata);
             return @enumFromInt(@intFromEnum(pc));
+        }
+
+        pub fn createDataChannel(pc: TPeerConnection, label: [:0]const u8, config: DataChannelConfig) InvalidOrRuntimeError!DataChannel(T) {
+            return .fromC(try handleIdWrapError(clib.rtcCreateDataChannelEx(pc.c(), label, &clib.rtcDataChannelInit{
+                .reliability = .{
+                    .unordered = config.unordered,
+                    .unreliable = switch (config.reliability) {
+                        .reliable => false,
+                        .maxPacketLifeTime => true,
+                        .maxRetransmits => true,
+                    },
+                    .maxPacketLifeTime = switch (config.reliability) {
+                        .maxPacketLifeTime => |v| v,
+                        else => undefined,
+                    },
+                    .maxRetransmits = switch (config.reliability) {
+                        .maxRetransmits => |v| v,
+                        else => undefined,
+                    },
+                },
+                .negotiated = config.negotiated,
+                .protocol = if (config.protocol) |v| v else null,
+                .manualStream = config.stream != null,
+                .stream = if (config.stream) |v| v else undefined,
+            })));
         }
 
         /// Add a track via a media description sdp like:
@@ -1060,6 +1184,18 @@ pub fn PeerConnection(comptime T: type) type {
             return clib.rtcIsNegotiationNeeded(pc.c());
         }
 
+        pub fn setDataChannelCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, DataChannel(T), *T) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_pc: c_int, _tr: c_int, _ptr: ?*anyopaque) callconv(.c) void {
+                    const self: TPeerConnection = .fromC(_pc);
+                    const ud = toUserPointer(_ptr);
+                    return callback(self, .fromC(_tr), toUserPointer(_ptr)) catch |err|
+                        handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetDataChannelCallback(pc.c(), Container.api_callback));
+        }
+
         pub fn setTrackCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, Track(T), *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
                 pub fn api_callback(_pc: c_int, _tr: c_int, _ptr: ?*anyopaque) callconv(.c) void {
@@ -1152,15 +1288,72 @@ pub fn PeerConnection(comptime T: type) type {
             return @intFromEnum(pc);
         }
 
-        inline fn toUserPointer(ptr: ?*anyopaque) *T {
-            return @ptrCast(@alignCast(ptr.?));
-        }
-
         inline fn fromC(pc: i32) TPeerConnection {
             return @enumFromInt(pc);
         }
 
+        inline fn toUserPointer(ptr: ?*anyopaque) *T {
+            return @ptrCast(@alignCast(ptr.?));
+        }
+
         const TPeerConnection = @This();
+    };
+}
+
+fn HandleCallback(comptime HT: type, comptime UT: type) type {
+    return struct {
+        pub fn setOpenCallback(handle: HT, comptime callback: *const fn (handle: HT, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    return callback(self, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetOpenCallback(handle.c(), Container.api_callback));
+        }
+
+        pub fn setClosedCallback(handle: HT, comptime callback: *const fn (handle: HT, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    return callback(self, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetClosedCallback(handle.c(), Container.api_callback));
+        }
+
+        pub fn setMessageCallback(handle: HT, comptime callback: *const fn (handle: HT, message: []const u8, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    const msg: []const u8 = if (size < 0)
+                        // Negative size means null-terminated pointer
+                        @as([:0]const u8, _message[0..@intCast(-size) :0])
+                    else
+                        @as([]const u8, _message[0..@intCast(size)]);
+                    return callback(self, msg, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetMessageCallback(handle.c(), Container.api_callback));
+        }
+
+        // inline fn c(handle: HT) u31 {
+        //     return @intFromEnum(handle);
+        // }
+
+        // inline fn fromC(handle: i32) HT {
+        //     return @enumFromInt(handle);
+        // }
+
+        inline fn toUserPointer(ptr: ?*anyopaque) *UT {
+            return @ptrCast(@alignCast(ptr.?));
+        }
     };
 }
 
