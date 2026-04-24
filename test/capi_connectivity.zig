@@ -102,30 +102,6 @@ test "capi connectivity" {
         try dc.setMessageCallback(messageCallback);
     }
 
-    // NOTE(jae): 2026-04-24
-    // We don't do a regular handshake here, we testing adding candidates directly
-    // by calling "other.pc.addRemoteCandidate"
-    //
-    // Initiate the handshake
-    {
-        // try peer1.pc.setLocalDescription(.unspecified);
-        //
-        // // Get local description
-        // {
-        //     var buf: [4096]u8 = undefined;
-        //     const local_description = try peer1.pc.getLocalDescription(&buf);
-        //     if (local_description.len == 0)
-        //         return error.EmptyPeer1LocalDescription;
-        //     const local_description_len = try peer1.pc.getLocalDescriptionSize();
-        //     if (local_description_len == 0)
-        //         return error.EmptyPeer1LocalDescription;
-        //     if (local_description_len - 1 != local_description.len) {
-        //         log.err("local description length mismatch: {} {}", .{ local_description.len, local_description_len });
-        //         return error.InvalidPeer1LocalDescription;
-        //     }
-        // }
-    }
-
     // Wait for connection
     {
         var attempts: u32 = 40;
