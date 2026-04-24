@@ -112,7 +112,7 @@ test "capi connectivity" {
         peer1.dc = dc.toOptional();
         try dc.setOpenCallback(dataChannelOpenCallback);
         try dc.setClosedCallback(dataChannelClosedCallback);
-        try dc.setMessageCallback(messageCallback);
+        try dc.setMessageCallback(dataChannelMessageCallback);
     }
 
     // Wait for connection
@@ -294,7 +294,7 @@ fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
     log.info("Peer({}): DataChannel: {} - Closed", .{ peer.pc, dc });
 }
 
-fn messageCallback(dc: rtc.DataChannel(Peer), data: []const u8, peer: *Peer) !void {
+fn dataChannelMessageCallback(dc: rtc.DataChannel(Peer), data: []const u8, peer: *Peer) !void {
     log.info("Peer({}): DataChannel: {} - message: {s}", .{ peer.pc, dc, data });
     const expected_message = switch (peer.id) {
         .peer1 => "Hello from 2",
@@ -333,7 +333,7 @@ fn dataChannelCallback(_: rtc.PeerConnection(Peer), dc: rtc.DataChannel(Peer), p
 
     try dc.setOpenCallback(dataChannelOpenCallback);
     try dc.setClosedCallback(dataChannelClosedCallback);
-    try dc.setMessageCallback(messageCallback);
+    try dc.setMessageCallback(dataChannelMessageCallback);
 
     peer.dc = dc.toOptional();
 }
