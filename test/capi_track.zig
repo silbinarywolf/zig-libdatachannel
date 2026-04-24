@@ -56,7 +56,8 @@ const MediaDescription: [:0]const u8 = "video 9 UDP/TLS/RTP/SAVPF\r\n" ++
     "a=sendonly\r\n";
 
 test "capi track" {
-    rtc.initLogger(.debug, rtc.defaultZigLogger);
+    // NOTE: Multiple calls from the same test runner can break this, so commented out.
+    // rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     // Create peer 1
     var peer1: Peer = undefined;
