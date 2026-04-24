@@ -156,6 +156,7 @@ test "capi track" {
             }
         }
         if (peer1.state != .connected or peer2.state != .connected) {
+            log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
             return error.PeerConnectionIsNotConnected;
         }
         if (!peer1.connected or !peer2.connected) {
@@ -165,6 +166,37 @@ test "capi track" {
             return error.ExhaustedAttempts;
         }
     }
+
+    // TODO: Improve this in the future to send and test a real valid RTP packet.
+    blk: {
+        const tr1 = peer1.tr.unwrap() orelse unreachable;
+        tr1.send("(peer 1 video data stream)") catch |err| switch (err) {
+            error.RtcFailure => break :blk,
+            else => |other_err| return other_err,
+        };
+        return error.Peer1ExpectedTrack1ToFailSending;
+    }
+
+    // // Wait for track packet
+    // {
+    //     var attempts: u32 = 40;
+    //     while (attempts > 0 and (!peer2.got_track_message)) {
+    //         attempts -= 1;
+
+    //         if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
+    //             // Deprecated path: Zig 0.15.X or lower
+    //             @import("std").Thread.sleep(250 * 1000000);
+    //         } else {
+    //             try testing.io.sleep(.fromMilliseconds(250), .boot);
+    //         }
+    //     }
+    //     if (!peer2.got_track_message) {
+    //         return error.PeerConnection2HasNoTrackMessage;
+    //     }
+    //     if (attempts == 0) {
+    //         return error.ExhaustedAttempts;
+    //     }
+    // }
 }
 
 fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type: [:0]const u8, peer: *Peer) !void {

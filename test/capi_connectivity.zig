@@ -129,6 +129,7 @@ test "capi connectivity" {
             }
         }
         if (peer1.state != .connected or peer2.state != .connected) {
+            log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
             return error.PeerConnectionIsNotConnected;
         }
         if ((peer1.ice_state != .connected and peer1.ice_state != .completed) or
