@@ -17,6 +17,7 @@ const Peer = struct {
     pc: rtc.PeerConnection(Peer),
     dc: rtc.OptionalDataChannel(Peer),
     connected: bool,
+    got_message: bool,
     other_peer: ?*Peer,
 
     fn init(peer: *Peer, config: rtc.PeerConnectionConfig) !void {
@@ -31,6 +32,7 @@ const Peer = struct {
             .pc = pc,
             .dc = .none,
             .connected = false,
+            .got_message = false,
             .other_peer = null,
         };
 
@@ -146,7 +148,10 @@ test "capi connectivity" {
             return error.PeerConnectionIceStateIsNotConnected;
         }
         if (!peer1.connected or !peer2.connected) {
-            return error.TrackNotConnected;
+            return error.DataChannelNotConnected;
+        }
+        if (!peer1.got_message or !peer2.got_message) {
+            return error.DataChannelMessageNotSentOrReceived;
         }
         if (attempts == 0) {
             return error.ExhaustedAttempts;
@@ -276,8 +281,22 @@ fn signalingStateCallback(pc: rtc.PeerConnection(Peer), signalling_state: rtc.Si
 }
 
 fn dataChannelOpenCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
-    peer.connected = true;
     log.info("Peer({}): DataChannel: {} - Open", .{ peer.pc, dc });
+    peer.connected = true;
+
+    // TODO: Add logic for testing messageCallback
+
+    // if (!dc.isOpen()) {
+    //     log.err("isOpen should be true, not false.");
+    //     return error.DataChannelIsOpenFailed;
+    // }
+    // if (dc.isClosed()) {
+    //     log.err("isClosed should be false, not true");
+    //     return error.DataChannelIsClosedFailed;
+    // }
+
+    // const char *message = peer == peer1 ? "Hello from 1" : "Hello from 2";
+    // rtcSendMessage(peer->dc, message, -1); // negative size indicates a null-terminated string
 }
 
 fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
@@ -286,6 +305,7 @@ fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
 }
 
 fn messageCallback(dc: rtc.DataChannel(Peer), kind: rtc.MessageType, data: []const u8, peer: *Peer) !void {
+    peer.got_message = true;
     log.info("Peer({}): DataChannel: {} - message: {s} ({t})", .{ peer.pc, dc, data, kind });
 }
 
