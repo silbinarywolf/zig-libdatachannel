@@ -1,5 +1,6 @@
-//! Zig port of "libdatachannel/test/capi_track.cpp"
+//! Zig port of "libdatachannel/test/capi_connectivity.cpp"
 const Allocator = @import("std").mem.Allocator;
+const ArenaAllocator = @import("std").heap.ArenaAllocator;
 const mem = @import("std").mem;
 const testing = @import("std").testing;
 const builtin = @import("builtin");
@@ -10,7 +11,9 @@ const log = @import("std").log.scoped(.capi_track);
 
 const Peer = struct {
     state: rtc.State,
-    gatheringState: rtc.GatheringState,
+    gathering_state: rtc.GatheringState,
+    ice_state: rtc.IceState,
+    signalling_state: ?rtc.SignalingState,
     pc: rtc.PeerConnection(Peer),
     dc: rtc.OptionalDataChannel(Peer),
     connected: bool,
@@ -22,7 +25,9 @@ const Peer = struct {
         errdefer pc.destroy();
         peer.* = .{
             .state = .new,
-            .gatheringState = .new,
+            .gathering_state = .new,
+            .ice_state = .new,
+            .signalling_state = null,
             .pc = pc,
             .dc = .none,
             .connected = false,
@@ -34,15 +39,24 @@ const Peer = struct {
         try pc.setLocalCandidateCallback(candidateCallback);
         try pc.setStateChangeCallback(stateChangeCallback);
         try pc.setGatheringStateChangeCallback(gatheringStateCallback);
+        try pc.setIceStateChangeCallback(iceStateChangeCallback);
+        try pc.setSignalingStateChangeCallback(signalingStateCallback);
     }
 
     fn deinit(peer: *Peer) void {
-        if (peer.dc.unwrap()) |tr| tr.close();
+        if (peer.dc.unwrap()) |dc| dc.close();
         peer.pc.close();
     }
 };
 
 test "capi connectivity" {
+    const gpa = testing.allocator;
+
+    // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file
+    // I've observed up to 35000 bytes before, so lets make our SDP buffer large.
+    const sdp_buf = try gpa.alloc(u8, 128000);
+    defer gpa.free(sdp_buf);
+
     rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     // Create peer 1
@@ -50,6 +64,8 @@ test "capi connectivity" {
     try peer1.init(.{
         // Custom MTU example
         .mtu = 1500,
+        .port_range_begin = 7000,
+        .port_range_end = 7009,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -59,8 +75,8 @@ test "capi connectivity" {
 
     var peer2: Peer = undefined;
     try peer2.init(.{
-        .port_range_begin = 7000,
-        .port_range_end = 8000,
+        .port_range_begin = 7010,
+        .port_range_end = 7019,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -72,59 +88,40 @@ test "capi connectivity" {
     peer1.other_peer = &peer2;
     peer2.other_peer = &peer1;
 
-    // Peer 1: Create track
+    // Peer 1: Create data channel
     {
-        const dc = try peer1.pc.createDataChannel("test", .{});
+        const dc = try peer1.pc.createDataChannel("test", .{
+            .protocol = "protocol",
+            .unordered = true,
+        });
         peer1.dc = dc.toOptional();
         try dc.setOpenCallback(dataChannelOpenCallback);
         try dc.setClosedCallback(dataChannelClosedCallback);
-        // var mid_buf: [256]u8 = undefined;
-        // const mid = try tr.getMid(&mid_buf);
-        // if (!mem.containsAtLeast(u8, mid, 1, "video")) {
-        //     return error.MissingPeer1MidVideo;
-        // }
-        // const direction = try tr.getDirection();
-        // if (direction != .sendonly) {
-        //     return error.InvalidPeer1DirectionExpectedSendOnly;
-        // }
+        try dc.setMessageCallback(messageCallback);
     }
 
-    // Test createOffer
-    blk: {
-        var buf: [4096]u8 = undefined;
-        const offer = try peer1.pc.createOffer(&buf);
-        if (offer.len == 0)
-            return error.EmptyPeer1OfferSize;
-        _ = peer1.pc.getLocalDescription(&buf) catch |err| switch (err) {
-            error.RtcNotAvailable => {
-                // Expected to get error.RtcNotAvailable
-                break :blk;
-            },
-            else => {
-                log.err("getLocalDescription should fail with RtcNotAvailable", .{});
-                return error.Peer1ExpectedLocalDescriptionRtcNotAvailable;
-            },
-        };
-        log.err("createOffer has set the local description, which is not expected behaviour", .{});
-        return error.Peer1ExpectedLocalDescriptionFailure;
-    }
-
+    // NOTE(jae): 2026-04-24
+    // We don't do a regular handshake here, we testing adding candidates directly
+    // by calling "other.pc.addRemoteCandidate"
+    //
     // Initiate the handshake
-    try peer1.pc.setLocalDescription(.unspecified);
-
-    // Get local description
     {
-        var buf: [4096]u8 = undefined;
-        const local_description = try peer1.pc.getLocalDescription(&buf);
-        if (local_description.len == 0)
-            return error.EmptyPeer1LocalDescription;
-        const local_description_len = try peer1.pc.getLocalDescriptionSize();
-        if (local_description_len == 0)
-            return error.EmptyPeer1LocalDescription;
-        if (local_description_len - 1 != local_description.len) {
-            log.err("local description length mismatch: {} {}", .{ local_description.len, local_description_len });
-            return error.InvalidPeer1LocalDescription;
-        }
+        // try peer1.pc.setLocalDescription(.unspecified);
+        //
+        // // Get local description
+        // {
+        //     var buf: [4096]u8 = undefined;
+        //     const local_description = try peer1.pc.getLocalDescription(&buf);
+        //     if (local_description.len == 0)
+        //         return error.EmptyPeer1LocalDescription;
+        //     const local_description_len = try peer1.pc.getLocalDescriptionSize();
+        //     if (local_description_len == 0)
+        //         return error.EmptyPeer1LocalDescription;
+        //     if (local_description_len - 1 != local_description.len) {
+        //         log.err("local description length mismatch: {} {}", .{ local_description.len, local_description_len });
+        //         return error.InvalidPeer1LocalDescription;
+        //     }
+        // }
     }
 
     // Wait for connection
@@ -143,12 +140,105 @@ test "capi connectivity" {
         if (peer1.state != .connected or peer2.state != .connected) {
             return error.PeerConnectionIsNotConnected;
         }
+        if ((peer1.ice_state != .connected and peer1.ice_state != .completed) or
+            (peer2.ice_state != .connected and peer2.ice_state != .completed))
+        {
+            return error.PeerConnectionIceStateIsNotConnected;
+        }
         if (!peer1.connected or !peer2.connected) {
             return error.TrackNotConnected;
         }
         if (attempts == 0) {
             return error.ExhaustedAttempts;
         }
+    }
+
+    log.info("Peer 1: Local Description SDP Type: {t}, SDP Data: {s}", .{
+        try peer1.pc.getLocalDescriptionType(),
+        try peer1.pc.getLocalDescription(sdp_buf),
+    });
+    log.info("Peer 1: Remote Description SDP Type: {t}, SDP Data: {s}", .{
+        try peer1.pc.getRemoteDescriptionType(),
+        try peer1.pc.getRemoteDescription(sdp_buf),
+    });
+    log.info("Peer 2: Local Description SDP Type: {t}, SDP Data: {s}", .{
+        try peer2.pc.getLocalDescriptionType(),
+        try peer2.pc.getLocalDescription(sdp_buf),
+    });
+    log.info("Peer 2: Remote Description SDP Type: {t}, SDP Data: {s}", .{
+        try peer2.pc.getRemoteDescriptionType(),
+        try peer2.pc.getRemoteDescription(sdp_buf),
+    });
+
+    // TODO(jae): 2026-04-24
+    // Add bindings for these functions from capi_connectivity.cpp
+
+    // if (rtcGetLocalAddress(peer1->pc, buffer, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetLocalAddress failed\n");
+    // goto error;
+    // }
+    // printf("Local address 1: %s\n", buffer);
+
+    // if (rtcGetRemoteAddress(peer1->pc, buffer, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetRemoteAddress failed\n");
+    // goto error;
+    // }
+    // printf("Remote address 1: %s\n", buffer);
+
+    // if (rtcGetLocalAddress(peer2->pc, buffer, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetLocalAddress failed\n");
+    // goto error;
+    // }
+    // printf("Local address 2: %s\n", buffer);
+
+    // if (rtcGetRemoteAddress(peer2->pc, buffer, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetRemoteAddress failed\n");
+    // goto error;
+    // }
+    // printf("Remote address 2: %s\n", buffer);
+
+    // if (rtcGetSelectedCandidatePair(peer1->pc, buffer, BUFFER_SIZE, buffer2, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetSelectedCandidatePair failed\n");
+    // goto error;
+    // }
+    // printf("Local candidate 1:  %s\n", buffer);
+    // printf("Remote candidate 1: %s\n", buffer2);
+
+    // if (rtcGetSelectedCandidatePair(peer2->pc, buffer, BUFFER_SIZE, buffer2, BUFFER_SIZE) < 0) {
+    // fprintf(stderr, "rtcGetSelectedCandidatePair failed\n");
+    // goto error;
+    // }
+    // printf("Local candidate 2:  %s\n", buffer);
+    // printf("Remote candidate 2: %s\n", buffer2);
+
+    // if (rtcGetMaxDataChannelStream(peer1->pc) <= 0 || rtcGetMaxDataChannelStream(peer2->pc) <= 0) {
+    // fprintf(stderr, "rtcGetMaxDataChannelStream failed\n");
+    // goto error;
+    // }
+
+    // TODO(jae): 2026-04-24
+    // Add bindings and testing for having no message callback set and receiving data manually
+    {
+        // const dc1 = peer1.dc.unwrap() orelse unreachable;
+        // const dc2 = peer2.dc.unwrap() orelse unreachable;
+        // dc2.removeMessageCallback();
+
+        // try dc1.sendMessage("foo");
+        if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
+            // Deprecated path: Zig 0.15.X or lower
+            @import("std").Thread.sleep(250 * 1000000);
+        } else {
+            try testing.io.sleep(.fromMilliseconds(250), .boot);
+        }
+        // size = 0;
+        // if (rtcReceiveMessage(peer2->dc, NULL, &size) < 0 || size != testLen) {
+        // fprintf(stderr, "rtcReceiveMessage failed to peek message size\n");
+        // goto error;
+        // }
+        // if (rtcReceiveMessage(peer2->dc, buffer, &size) < 0 || size != testLen) {
+        // fprintf(stderr, "rtcReceiveMessage failed to get the message\n");
+        // goto error;
+        // }
     }
 }
 
@@ -159,29 +249,44 @@ fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type
 }
 
 fn candidateCallback(pc: rtc.PeerConnection(Peer), candidate: [:0]const u8, mid: [:0]const u8, peer: *Peer) !void {
-    log.info("Candidate: {} - {s}", .{ pc, candidate });
+    log.info("Peer({}): Candidate: {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
+
     const other = peer.other_peer.?;
     try other.pc.addRemoteCandidate(candidate, mid);
 }
 
 fn stateChangeCallback(pc: rtc.PeerConnection(Peer), state: rtc.State, peer: *Peer) !void {
     peer.state = state;
-    log.info("State: {} - {}", .{ pc, state });
+    log.info("Peer({}): State: {}", .{ pc, state });
 }
 
 fn gatheringStateCallback(pc: rtc.PeerConnection(Peer), gathering_state: rtc.GatheringState, peer: *Peer) !void {
-    peer.gatheringState = gathering_state;
-    log.info("Gathering state: {} - {}", .{ pc, gathering_state });
+    peer.gathering_state = gathering_state;
+    log.info("Peer({}): Gathering state: {}", .{ pc, gathering_state });
 }
 
-fn dataChannelOpenCallback(_: rtc.DataChannel(Peer), peer: *Peer) !void {
+fn iceStateChangeCallback(pc: rtc.PeerConnection(Peer), ice_state: rtc.IceState, peer: *Peer) !void {
+    peer.ice_state = ice_state;
+    log.info("Peer({}): ICE state: {}", .{ pc, ice_state });
+}
+
+fn signalingStateCallback(pc: rtc.PeerConnection(Peer), signalling_state: rtc.SignalingState, peer: *Peer) !void {
+    peer.signalling_state = signalling_state;
+    log.info("Peer({}): Signaling state: {}", .{ pc, signalling_state });
+}
+
+fn dataChannelOpenCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
     peer.connected = true;
-    log.info("DataChannel: {} - Open", .{peer.pc});
+    log.info("Peer({}): DataChannel: {} - Open", .{ peer.pc, dc });
 }
 
-fn dataChannelClosedCallback(_: rtc.DataChannel(Peer), peer: *Peer) !void {
+fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
     peer.connected = false;
-    log.info("DataChannel: {} - Closed", .{peer.pc});
+    log.info("Peer({}): DataChannel: {} - Closed", .{ peer.pc, dc });
+}
+
+fn messageCallback(dc: rtc.DataChannel(Peer), kind: rtc.MessageType, data: []const u8, peer: *Peer) !void {
+    log.info("Peer({}): DataChannel: {} - message: {s} ({t})", .{ peer.pc, dc, data, kind });
 }
 
 fn dataChannelCallback(_: rtc.PeerConnection(Peer), dc: rtc.DataChannel(Peer), peer: *Peer) !void {
@@ -189,69 +294,30 @@ fn dataChannelCallback(_: rtc.PeerConnection(Peer), dc: rtc.DataChannel(Peer), p
 
     var label_buf: [256]u8 = undefined;
     const label = try dc.getLabel(&label_buf);
+
+    var protocol_buf: [256]u8 = undefined;
+    const protocol = try dc.getProtocol(&protocol_buf);
+
+    const reliability = try dc.getReliability();
+
+    log.info("Peer({}): DataChannel: {} - Received with label \"{s}\" and protocol \"{s}\"", .{ peer.pc, dc, label, protocol });
+
     if (!mem.eql(u8, label, "test")) {
-        log.err("Peer({}): DataChannel: {} - expected 'test' label, not {s}", .{ peer.pc, dc, label });
-        return error.GetLabelFailed;
+        log.err("Peer({}): DataChannel: {} - wrong DataChannel label", .{ peer.pc, dc });
+        return error.UnexpectedDataChannelLabel;
+    }
+    if (!mem.eql(u8, protocol, "protocol")) {
+        log.err("Peer({}): DataChannel: {} - wrong DataChannel protocol", .{ peer.pc, dc });
+        return error.UnexpectedDataChannelProtocol;
+    }
+    if (reliability.unordered == false) {
+        log.err("Peer({}): DataChannel: {} - wrong DataChannel reliability (unordered was true, expected false)", .{ peer.pc, dc });
+        return error.UnexpectedDataChannelReliability;
     }
 
-    // char protocol[256];
-    // if (rtcGetDataChannelProtocol(dc, protocol, 256) < 0) {
-    // fprintf(stderr, "rtcGetDataChannelProtocol failed\n");
-    // return;
-    // }
+    try dc.setOpenCallback(dataChannelOpenCallback);
+    try dc.setClosedCallback(dataChannelClosedCallback);
+    try dc.setMessageCallback(messageCallback);
 
-    // rtcReliability reliability;
-    // if (rtcGetDataChannelReliability(dc, &reliability) < 0) {
-    // fprintf(stderr, "rtcGetDataChannelReliability failed\n");
-    // return;
-    // }
-
-    // printf("DataChannel %d: Received with label \"%s\" and protocol \"%s\"\n",
-    //        peer == peer1 ? 1 : 2, label, protocol);
-
-    // if (strcmp(label, "test") != 0) {
-    // fprintf(stderr, "Wrong DataChannel label\n");
-    // return;
-    // }
-
-    // if (strcmp(protocol, "protocol") != 0) {
-    // fprintf(stderr, "Wrong DataChannel protocol\n");
-    // return;
-    // }
-
-    // if (reliability.unordered == false) {
-    // fprintf(stderr, "Wrong DataChannel reliability\n");
-    // return;
-    // }
-
-    // rtcSetOpenCallback(dc, openCallback);
-    // rtcSetClosedCallback(dc, closedCallback);
-    // rtcSetMessageCallback(dc, messageCallback);
-
-    // peer->dc = dc;
-
-    // TRACK EXAMPLE
-    // -------------
-
-    // var mid_buf: [256]u8 = undefined;
-    // const mid = try tr.getMid(&mid_buf);
-    // if (!mem.eql(u8, mid, "video")) {
-    //     log.err("Peer({}): Track: {} - invalid mid identifier: {s}", .{ peer.pc, tr, mid });
-    //     return error.GetTrackMidFailed;
-    // }
-
-    // const direction = try tr.getDirection();
-    // if (direction != .recvonly) {
-    //     log.err("Peer({}): Track: {} - invalid direction: {}", .{ peer.pc, tr, direction });
-    //     return error.GetTrackDirectionFailed;
-    // }
-
-    // var track_description_buf: [1024]u8 = undefined;
-    // const track_description = try tr.getDescription(&track_description_buf);
-
-    // log.info("Peer({}): Track: {} - Received with media description: {s}", .{ peer.pc, tr, track_description });
-
-    // peer.tr = tr.toOptional();
-    // try tr.setOpenCallback(dataChannelOpenCallback);
-    // try tr.setClosedCallback(dataChannelClosedCallback);
+    peer.dc = dc.toOptional();
 }

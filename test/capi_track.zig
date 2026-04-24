@@ -52,6 +52,8 @@ test "capi track" {
     // Create peer 1
     var peer1: Peer = undefined;
     try peer1.init(.{
+        .port_range_begin = 5000,
+        .port_range_end = 5009,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -61,8 +63,8 @@ test "capi track" {
 
     var peer2: Peer = undefined;
     try peer2.init(.{
-        .port_range_begin = 5000,
-        .port_range_end = 6000,
+        .port_range_begin = 5010,
+        .port_range_end = 5019,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",

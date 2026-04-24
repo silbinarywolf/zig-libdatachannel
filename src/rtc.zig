@@ -11,6 +11,7 @@ const span = @import("std").mem.span;
 const StaticStringMap = @import("std").StaticStringMap;
 const writeStackTrace = @import("std").debug.writeStackTrace;
 const builtin = @import("builtin");
+const Allocator = @import("std").mem.Allocator;
 
 const clib = @import("clibdatachannel");
 
@@ -639,6 +640,11 @@ pub const DataChannelConfig = struct {
     stream: ?u16 = null,
 };
 
+pub const MessageType = enum(u1) {
+    binary = 0,
+    string = 1,
+};
+
 /// DataChannel implicitly inherits PeerConnection 'setUserPointer'
 pub fn DataChannel(comptime T: type) type {
     return enum(u31) {
@@ -704,7 +710,24 @@ pub fn DataChannel(comptime T: type) type {
         }
         pub const setOpenCallback = HandleCallback(CDataChannel, T).setOpenCallback;
         pub const setClosedCallback = HandleCallback(CDataChannel, T).setClosedCallback;
-        pub const setMessageCallback = HandleCallback(CDataChannel, T).setMessageCallback;
+
+        pub fn setMessageCallback(dc: CDataChannel, comptime callback: *const fn (dc: CDataChannel, message_type: MessageType, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: CDataChannel = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    const payload: struct { MessageType, []const u8 } = if (size < 0)
+                        // If negative size then it's a string and null-terminated pointer
+                        .{ .string, @as([:0]const u8, _message[0..@intCast(-size) :0]) }
+                    else
+                        // If positive size then it's a binary payload
+                        .{ .binary, @as([]const u8, _message[0..@intCast(size)]) };
+                    return callback(self, payload.@"0", payload.@"1", ud) catch |err|
+                        handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetMessageCallback(dc.c(), Container.api_callback));
+        }
 
         inline fn c(dc: CDataChannel) u31 {
             return @intFromEnum(dc);
@@ -870,7 +893,23 @@ pub fn Track(comptime T: type) type {
 
         pub const setOpenCallback = HandleCallback(CTrack, T).setOpenCallback;
         pub const setClosedCallback = HandleCallback(CTrack, T).setClosedCallback;
-        pub const setMessageCallback = HandleCallback(CTrack, T).setMessageCallback;
+
+        pub fn setMessageCallback(tr: CTrack, comptime callback: *const fn (tr: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: CTrack = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    const msg: []const u8 = if (size < 0)
+                        // Negative size means null-terminated pointer
+                        @as([:0]const u8, _message[0..@intCast(-size) :0])
+                    else
+                        @as([]const u8, _message[0..@intCast(size)]);
+                    return callback(self, msg, ud) catch |err|
+                        .handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), Container.api_callback));
+        }
 
         pub fn setErrorCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, error_message: [:0]const u8, userdata: *T) void) InvalidOrRuntimeError!void {
             const Container = struct {
@@ -1156,6 +1195,22 @@ pub fn PeerConnection(comptime T: type) type {
             return try handleWrapError(clib.rtcSetRemoteDescription(pc.c(), sdp, sdp_type.toCString()));
         }
 
+        /// Get the SDP type of the local description
+        pub inline fn getLocalDescriptionType(pc: TPeerConnection) BufferOrNotAvailableError!SdpType {
+            var buf: [12]u8 = undefined;
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescriptionType(pc.c(), &buf, @intCast(buf.len)));
+            const sdp_type_as_c_string = buf[0 .. size - 1 :0];
+            return SdpType.fromString(sdp_type_as_c_string);
+        }
+
+        /// Get the SDP type of the remote description
+        pub inline fn getRemoteDescriptionType(pc: TPeerConnection) BufferOrNotAvailableError!SdpType {
+            var buf: [12]u8 = undefined;
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetRemoteDescriptionType(pc.c(), &buf, @intCast(buf.len)));
+            const sdp_type_as_c_string = buf[0 .. size - 1 :0];
+            return SdpType.fromString(sdp_type_as_c_string);
+        }
+
         /// Start the handshake by setting the local description.
         ///
         /// Using ".unspecified" is the equivalent to "rtcSetLocalDescription(pc, NULL)"
@@ -1244,7 +1299,7 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcSetStateChangeCallback(pc.c(), Container.api_callback));
         }
 
-        pub fn setIceStateChangeCallback(pc: TPeerConnection, comptime callback: *const fn (PeerConnection, IceState, *T) anyerror!void) InvalidOrRuntimeError!void {
+        pub fn setIceStateChangeCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, IceState, *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
                 pub fn api_callback(_pc: c_int, _ice_state: clib.rtcIceState, _userdata: ?*anyopaque) callconv(.c) void {
                     const self: TPeerConnection = .fromC(_pc);
@@ -1324,23 +1379,6 @@ fn HandleCallback(comptime HT: type, comptime UT: type) type {
                 }
             };
             return handleWrapError(clib.rtcSetClosedCallback(handle.c(), Container.api_callback));
-        }
-
-        pub fn setMessageCallback(handle: HT, comptime callback: *const fn (handle: HT, message: []const u8, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: HT = .fromC(_id);
-                    const ud = toUserPointer(_userdata);
-                    const msg: []const u8 = if (size < 0)
-                        // Negative size means null-terminated pointer
-                        @as([:0]const u8, _message[0..@intCast(-size) :0])
-                    else
-                        @as([]const u8, _message[0..@intCast(size)]);
-                    return callback(self, msg, ud) catch |err|
-                        HT.handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetMessageCallback(handle.c(), Container.api_callback));
         }
 
         // inline fn c(handle: HT) u31 {
