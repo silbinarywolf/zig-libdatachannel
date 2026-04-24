@@ -714,8 +714,10 @@ pub fn DataChannel(comptime T: type) type {
         pub const setOpenCallback = Channel(CDataChannel, T).setOpenCallback;
         pub const setClosedCallback = Channel(CDataChannel, T).setClosedCallback;
         pub const send = Channel(CDataChannel, T).send;
+        pub const receiveSize = Channel(CDataChannel, T).receiveSize;
+        pub const receive = Channel(CDataChannel, T).receive;
 
-        pub fn setMessageCallback(dc: CDataChannel, comptime callback: *const fn (dc: CDataChannel, message_type: MessageType, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
+        pub fn setMessageCallback(dc: CDataChannel, comptime callback: ?*const fn (dc: CDataChannel, message_type: MessageType, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
                 pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
                     const self: CDataChannel = .fromC(_id);
@@ -726,11 +728,11 @@ pub fn DataChannel(comptime T: type) type {
                     else
                         // If positive size then it's a binary payload
                         .{ .binary, @as([]const u8, _message[0..@intCast(size)]) };
-                    return callback(self, payload.@"0", payload.@"1", ud) catch |err|
+                    return callback.?(self, payload.@"0", payload.@"1", ud) catch |err|
                         handleErrorResult(self, err, ud);
                 }
             };
-            return handleWrapError(clib.rtcSetMessageCallback(dc.c(), Container.api_callback));
+            return handleWrapError(clib.rtcSetMessageCallback(dc.c(), if (callback != null) Container.api_callback else null));
         }
 
         inline fn c(dc: CDataChannel) u31 {
@@ -893,7 +895,7 @@ pub fn Track(comptime T: type) type {
         pub const setClosedCallback = Channel(CTrack, T).setClosedCallback;
         pub const send = Channel(CTrack, T).send;
 
-        pub fn setMessageCallback(tr: CTrack, comptime callback: *const fn (tr: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
+        pub fn setMessageCallback(tr: CTrack, comptime callback: ?*const fn (tr: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
                 pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
                     const self: CTrack = .fromC(_id);
@@ -903,11 +905,11 @@ pub fn Track(comptime T: type) type {
                         @as([:0]const u8, _message[0..@intCast(-size) :0])
                     else
                         @as([]const u8, _message[0..@intCast(size)]);
-                    return callback(self, msg, ud) catch |err|
+                    return callback.?(self, msg, ud) catch |err|
                         .handleErrorResult(self, err, ud);
                 }
             };
-            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), Container.api_callback));
+            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), if (callback != null) Container.api_callback else null));
         }
 
         pub fn setErrorCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, error_message: [:0]const u8, userdata: *T) void) InvalidOrRuntimeError!void {
@@ -932,9 +934,7 @@ pub fn Track(comptime T: type) type {
         }
 
         fn handleErrorResult(tr: CTrack, err: anyerror, _: *T) void {
-            // if (Options.error_handler) |error_handler| {
-            //     return error_handler(pc, err, userdata);
-            // }
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
 
             // Close the track on error
             logrtc.err("unhandled error occurred with track({}): {s}", .{ tr, @errorName(err) });
@@ -1071,7 +1071,7 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcDeletePeerConnection(pc.c())) catch |err| switch (err) {
                 error.RtcInvalid => {
                     if (builtin.mode == .Debug)
-                        panic("Invalid peer connection id given: {}", .{pc});
+                        panic("invalid peer connection id given: {}", .{pc});
                 },
                 else => unreachable,
             };
@@ -1173,6 +1173,13 @@ pub fn PeerConnection(comptime T: type) type {
             return size;
         }
 
+        /// Get the length of the local description (including null-terminating byte)
+        /// See "getLocalDescription" to get the result and put it into a buffer.
+        pub inline fn getLocalDescriptionSize(pc: TPeerConnection) BufferOrNotAvailableError!u31 {
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0));
+            return size;
+        }
+
         pub inline fn getLocalDescription(pc: TPeerConnection, buf: []u8) BufferOrNotAvailableError![:0]u8 {
             const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), buf.ptr, @intCast(buf.len)));
             return buf[0 .. size - 1 :0];
@@ -1181,13 +1188,6 @@ pub fn PeerConnection(comptime T: type) type {
         pub inline fn getRemoteDescription(pc: TPeerConnection, buf: []u8) BufferOrNotAvailableError![:0]u8 {
             const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), buf.ptr, @intCast(buf.len)));
             return buf[0 .. size - 1 :0];
-        }
-
-        /// Get the length of the local description (including null-terminating byte)
-        /// See "getLocalDescription" to get the result and put it into a buffer.
-        pub inline fn getLocalDescriptionSize(pc: TPeerConnection) BufferOrNotAvailableError!u31 {
-            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0));
-            return size;
         }
 
         pub inline fn setRemoteDescription(pc: TPeerConnection, sdp: [:0]const u8, sdp_type: SdpType) InvalidOrRuntimeError!void {
@@ -1334,20 +1334,27 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcSetSignalingStateChangeCallback(pc.c(), Container.api_callback));
         }
 
-        /// Check if the Peer Connection exists and is not closed
-        pub inline fn isClosed(pc: TPeerConnection) error{RtcFailure}!bool {
+        /// Returns true if a Peer connection has had "destroy()" called or is invalid.
+        ///
+        /// NOTE: This function mostly exists to improve test-code and early exit if a callback causes a Peer Connection to be closed.
+        pub inline fn isInvalidOrDestroyed(pc: TPeerConnection) bool {
             // NOTE(jae): 2026-04-24
             // Detect closure of a Peer Connection by just checking if description type returns anything
             _ = handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0)) catch |err| switch (err) {
                 // When getPeerConnection() is called, it returns invalid if it doesn't exist
-                error.RtcInvalid => return true,
+                error.RtcInvalid => return false,
                 // If local description is not available, then Peer connection exists
-                error.RtcNotAvailable => return false,
-                // If there is a buffer to return, then the Peer Connection is not closed
-                error.BufferTooSmall => return false,
-                else => |other_err| return other_err,
+                error.RtcNotAvailable,
+                // If there is a buffer to return, then the Peer Connection exists
+                error.BufferTooSmall,
+                => return true,
+                // If RtcFailure occurred then behaviour is undefined, so assert and assume open
+                error.RtcFailure => {
+                    assert(false);
+                    return false;
+                },
             };
-            return false;
+            return true;
         }
 
         pub inline fn toOptional(pc: TPeerConnection) OptionalPeerConnection(T) {
@@ -1406,8 +1413,25 @@ fn Channel(comptime HT: type, comptime UT: type) type {
             return clib.rtcIsClosed(handle.c());
         }
 
-        pub inline fn send(handle: HT, data: []const u8) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcSendMessage(handle.c(), data.ptr, @intCast(data.len)));
+        pub inline fn receiveSize(handle: HT) BufferOrNotAvailableError!u31 {
+            var size_c: c_int = undefined;
+            try handleNotAvailableWrapError(clib.rtcReceiveMessage(handle.c(), null, &size_c));
+            return @intCast(@abs(size_c));
+        }
+
+        pub inline fn receive(handle: HT, buf: []u8) BufferOrNotAvailableError![]const u8 {
+            var buf_and_res_size: c_int = @intCast(buf.len);
+            try handleNotAvailableWrapError(clib.rtcReceiveMessage(handle.c(), buf.ptr, &buf_and_res_size));
+            const message: []const u8 = if (buf_and_res_size < 0)
+                // Negative size means null-terminated pointer
+                @as([:0]const u8, buf[0..@intCast(-buf_and_res_size) :0])
+            else
+                @as([]const u8, buf[0..@intCast(buf_and_res_size)]);
+            return message;
+        }
+
+        pub inline fn send(handle: HT, buf: []const u8) InvalidOrRuntimeError!void {
+            return try handleWrapError(clib.rtcSendMessage(handle.c(), buf.ptr, @intCast(buf.len)));
         }
 
         inline fn toUserPointer(ptr: ?*anyopaque) *UT {
@@ -1428,7 +1452,7 @@ fn handleIdWrapError(res: c_int) InvalidOrRuntimeError!u31 {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => unreachable, // RTC_ERR_TOO_SMALL
+        -4 => unreachable, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }
@@ -1441,7 +1465,7 @@ fn handleSizeWrapError(res: c_int) BufferError!u31 {
         -1 => error.RtcInvalid, // RTC_ERR_INVALID
         -2 => error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => error.BufferTooSmall, // RTC_ERR_TOO_SMALL
+        -4 => error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     };
 }
@@ -1454,7 +1478,20 @@ fn handleSizeNotAvailableWrapError(res: c_int) BufferOrNotAvailableError!u31 {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => return error.RtcNotAvailable, // RTC_ERR_NOT_AVAIL
-        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL
+        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
+        else => unreachable,
+    }
+}
+
+/// Like "handleSizeNotAvailableWrapError" but is a different API used by "rtcReceiveMessage"
+fn handleNotAvailableWrapError(res: c_int) BufferOrNotAvailableError!void {
+    if (res >= 0) return;
+
+    switch (res) {
+        -1 => return error.RtcInvalid, // RTC_ERR_INVALID
+        -2 => return error.RtcFailure, // RTC_ERR_FAILURE
+        -3 => return error.RtcNotAvailable, // RTC_ERR_NOT_AVAIL
+        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }
@@ -1466,7 +1503,7 @@ fn handleWrapError(res: c_int) InvalidOrRuntimeError!void {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => unreachable, // RTC_ERR_TOO_SMALL
+        -4 => unreachable, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }

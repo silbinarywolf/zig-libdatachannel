@@ -61,12 +61,12 @@ const Peer = struct {
 test "capi connectivity" {
     const gpa = testing.allocator;
 
+    rtc.initLogger(.debug, rtc.defaultZigLogger);
+
     // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file
     // I've observed up to 35000 bytes before, so lets make our SDP buffer large.
     const sdp_buf = try gpa.alloc(u8, 128000);
     defer gpa.free(sdp_buf);
-
-    rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     // Create peer 1
     var peer1: Peer = undefined;
@@ -98,10 +98,10 @@ test "capi connectivity" {
     peer2.other_peer = &peer1;
 
     // Check if peer connections are open
-    if (try peer1.pc.isClosed()) {
+    if (!peer1.pc.isInvalidOrDestroyed()) {
         return error.Peer1ShouldNotBeClosed;
     }
-    if (try peer2.pc.isClosed()) {
+    if (!peer2.pc.isInvalidOrDestroyed()) {
         return error.Peer2ShouldNotBeClosed;
     }
 
@@ -122,11 +122,6 @@ test "capi connectivity" {
         var attempts: u32 = 40;
         while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
             attempts -= 1;
-
-            // If a Zig error occurs the peer connection gets closed
-            if (try peer1.pc.isClosed() or try peer2.pc.isClosed()) {
-                break;
-            }
 
             if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
                 // Deprecated path: Zig 0.15.X or lower
@@ -217,29 +212,29 @@ test "capi connectivity" {
     // goto error;
     // }
 
-    // TODO(jae): 2026-04-24
-    // Add bindings and testing for having no message callback set and receiving data manually
+    // Test receiving message
     {
-        // const dc1 = peer1.dc.unwrap() orelse unreachable;
-        // const dc2 = peer2.dc.unwrap() orelse unreachable;
-        // dc2.removeMessageCallback();
+        const dc1 = peer1.dc.unwrap() orelse unreachable;
+        const dc2 = peer2.dc.unwrap() orelse unreachable;
+        try dc2.setMessageCallback(null);
 
-        // try dc1.sendMessage("foo");
+        const message = "foo";
+        try dc1.send(message);
         if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
             // Deprecated path: Zig 0.15.X or lower
             @import("std").Thread.sleep(250 * 1000000);
         } else {
             try testing.io.sleep(.fromMilliseconds(250), .boot);
         }
-        // size = 0;
-        // if (rtcReceiveMessage(peer2->dc, NULL, &size) < 0 || size != testLen) {
-        // fprintf(stderr, "rtcReceiveMessage failed to peek message size\n");
-        // goto error;
-        // }
-        // if (rtcReceiveMessage(peer2->dc, buffer, &size) < 0 || size != testLen) {
-        // fprintf(stderr, "rtcReceiveMessage failed to get the message\n");
-        // goto error;
-        // }
+        const size = try dc2.receiveSize();
+        if (size != message.len) {
+            return error.InvalidMessageSize;
+        }
+        var recv_buf: [16]u8 = undefined;
+        const recv = try dc2.receive(recv_buf[0..size]);
+        if (!mem.eql(u8, message, recv)) {
+            return error.InvalidMessageReceived;
+        }
     }
 }
 
