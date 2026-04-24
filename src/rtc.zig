@@ -709,31 +709,16 @@ pub fn DataChannel(comptime T: type) type {
             };
         }
 
+        // C-bindings for libdatachannel share the same C-API functions for across DataChannel, Track and Websockets.
+
         pub const isOpen = Channel(CDataChannel, T).isOpen;
         pub const isClosed = Channel(CDataChannel, T).isClosed;
         pub const setOpenCallback = Channel(CDataChannel, T).setOpenCallback;
         pub const setClosedCallback = Channel(CDataChannel, T).setClosedCallback;
+        pub const setMessageCallback = Channel(CDataChannel, T).setMessageCallback;
         pub const send = Channel(CDataChannel, T).send;
         pub const receiveSize = Channel(CDataChannel, T).receiveSize;
         pub const receive = Channel(CDataChannel, T).receive;
-
-        pub fn setMessageCallback(dc: CDataChannel, comptime callback: ?*const fn (dc: CDataChannel, message_type: MessageType, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CDataChannel = .fromC(_id);
-                    const ud = toUserPointer(_userdata);
-                    const payload: struct { MessageType, []const u8 } = if (size < 0)
-                        // If negative size then it's a string and null-terminated pointer
-                        .{ .string, @as([:0]const u8, _message[0..@intCast(-size) :0]) }
-                    else
-                        // If positive size then it's a binary payload
-                        .{ .binary, @as([]const u8, _message[0..@intCast(size)]) };
-                    return callback.?(self, payload.@"0", payload.@"1", ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetMessageCallback(dc.c(), if (callback != null) Container.api_callback else null));
-        }
 
         inline fn c(dc: CDataChannel) u31 {
             return @intFromEnum(dc);
@@ -889,28 +874,14 @@ pub fn Track(comptime T: type) type {
             return @enumFromInt(@intFromEnum(tr));
         }
 
+        // C-bindings for libdatachannel share the same C-API functions for across DataChannel, Track and Websockets.
+
         pub const isOpen = Channel(CTrack, T).isOpen;
         pub const isClosed = Channel(CTrack, T).isClosed;
         pub const setOpenCallback = Channel(CTrack, T).setOpenCallback;
         pub const setClosedCallback = Channel(CTrack, T).setClosedCallback;
+        pub const setMessageCallback = Channel(CTrack, T).setMessageCallback;
         pub const send = Channel(CTrack, T).send;
-
-        pub fn setMessageCallback(tr: CTrack, comptime callback: ?*const fn (tr: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_id);
-                    const ud = toUserPointer(_userdata);
-                    const msg: []const u8 = if (size < 0)
-                        // Negative size means null-terminated pointer
-                        @as([:0]const u8, _message[0..@intCast(-size) :0])
-                    else
-                        @as([]const u8, _message[0..@intCast(size)]);
-                    return callback.?(self, msg, ud) catch |err|
-                        .handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), if (callback != null) Container.api_callback else null));
-        }
 
         pub fn setErrorCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, error_message: [:0]const u8, userdata: *T) void) InvalidOrRuntimeError!void {
             const Container = struct {
@@ -1403,6 +1374,37 @@ fn Channel(comptime HT: type, comptime UT: type) type {
                 }
             };
             return handleWrapError(clib.rtcSetClosedCallback(handle.c(), Container.api_callback));
+        }
+
+        pub fn setMessageCallback(handle: HT, comptime callback: ?*const fn (handle: HT, message: []const u8, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+
+                    // NOTE(jae): 2026-04-24
+                    // I'm pretty sure only WebSocket handles 'string' and 'binary' as seperate payload types.
+                    // The rule described with "rtcSetMessageCallback" is that size is negative if its a string
+                    if (size < 0) unreachable;
+
+                    const message = @as([]const u8, _message[0..@intCast(size)]);
+                    return callback.?(self, message, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+
+                    // NOTE(jae): 2026-04-24
+                    // I'm pretty sure only WebSocket handles 'string' and 'binary' as seperate payload types
+                    //
+                    // const payload: struct { MessageType, []const u8 } = if (size < 0)
+                    //     // If negative size then it's a string and null-terminated pointer
+                    //     .{ .string, @as([:0]const u8, _message[0..@intCast(-size) :0]) }
+                    // else
+                    //     // If positive size then it's a binary payload
+                    //     .{ .binary, @as([]const u8, _message[0..@intCast(size)]) };
+                    // return callback.?(self, payload.@"0", payload.@"1", ud) catch |err|
+                    //     handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetMessageCallback(handle.c(), if (callback != null) Container.api_callback else null));
         }
 
         pub inline fn isOpen(handle: HT) bool {

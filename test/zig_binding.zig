@@ -5,8 +5,6 @@ const PeerUserPointer = struct {};
 const TrackUserPointer = struct {};
 
 test "PeerConnection, DataChannel and Track isOpen/isClosed" {
-    rtc.initLogger(.none, null);
-
     var valid_peer_connection: rtc.PeerConnection(void) = try .create({}, .{});
     try testing.expect(valid_peer_connection.isInvalidOrDestroyed());
     valid_peer_connection.destroy();
@@ -25,8 +23,6 @@ test "PeerConnection, DataChannel and Track isOpen/isClosed" {
 }
 
 test "PeerConnection void type promotion" {
-    rtc.initLogger(.debug, rtc.defaultZigLogger);
-
     // Create PeerConnection with no user pointer (void)
     const vpc = try rtc.PeerConnection(void).create({}, .{});
     defer vpc.destroy();

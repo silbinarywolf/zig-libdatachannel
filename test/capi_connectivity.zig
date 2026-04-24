@@ -61,8 +61,6 @@ const Peer = struct {
 test "capi connectivity" {
     const gpa = testing.allocator;
 
-    rtc.initLogger(.debug, rtc.defaultZigLogger);
-
     // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file
     // I've observed up to 35000 bytes before, so lets make our SDP buffer large.
     const sdp_buf = try gpa.alloc(u8, 128000);
@@ -296,8 +294,8 @@ fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
     log.info("Peer({}): DataChannel: {} - Closed", .{ peer.pc, dc });
 }
 
-fn messageCallback(dc: rtc.DataChannel(Peer), kind: rtc.MessageType, data: []const u8, peer: *Peer) !void {
-    log.info("Peer({}): DataChannel: {} - message: {s} ({t})", .{ peer.pc, dc, data, kind });
+fn messageCallback(dc: rtc.DataChannel(Peer), data: []const u8, peer: *Peer) !void {
+    log.info("Peer({}): DataChannel: {} - message: {s}", .{ peer.pc, dc, data });
     const expected_message = switch (peer.id) {
         .peer1 => "Hello from 2",
         .peer2 => "Hello from 1",
