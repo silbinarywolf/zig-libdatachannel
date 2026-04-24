@@ -708,8 +708,12 @@ pub fn DataChannel(comptime T: type) type {
                 .maxRetransmits = res.maxRetransmits,
             };
         }
-        pub const setOpenCallback = HandleCallback(CDataChannel, T).setOpenCallback;
-        pub const setClosedCallback = HandleCallback(CDataChannel, T).setClosedCallback;
+
+        pub const isOpen = Channel(CDataChannel, T).isOpen;
+        pub const isClosed = Channel(CDataChannel, T).isClosed;
+        pub const setOpenCallback = Channel(CDataChannel, T).setOpenCallback;
+        pub const setClosedCallback = Channel(CDataChannel, T).setClosedCallback;
+        pub const send = Channel(CDataChannel, T).send;
 
         pub fn setMessageCallback(dc: CDataChannel, comptime callback: *const fn (dc: CDataChannel, message_type: MessageType, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
@@ -853,14 +857,6 @@ pub fn Track(comptime T: type) type {
             return try handleWrapError(clib.rtcRequestKeyframe(tr.c()));
         }
 
-        pub inline fn isOpen(tr: CTrack) bool {
-            return clib.rtcIsOpen(tr.c());
-        }
-
-        pub inline fn send(tr: CTrack, data: []const u8) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcSendMessage(tr.c(), data.ptr, @intCast(data.len)));
-        }
-
         /// add RtcpReceivingSession media handler
         pub inline fn chainRtcpReceivingSession(tr: CTrack) InvalidOrRuntimeError!void {
             return handleWrapError(clib.rtcChainRtcpReceivingSession(tr.c()));
@@ -891,8 +887,11 @@ pub fn Track(comptime T: type) type {
             return @enumFromInt(@intFromEnum(tr));
         }
 
-        pub const setOpenCallback = HandleCallback(CTrack, T).setOpenCallback;
-        pub const setClosedCallback = HandleCallback(CTrack, T).setClosedCallback;
+        pub const isOpen = Channel(CTrack, T).isOpen;
+        pub const isClosed = Channel(CTrack, T).isClosed;
+        pub const setOpenCallback = Channel(CTrack, T).setOpenCallback;
+        pub const setClosedCallback = Channel(CTrack, T).setClosedCallback;
+        pub const send = Channel(CTrack, T).send;
 
         pub fn setMessageCallback(tr: CTrack, comptime callback: *const fn (tr: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
@@ -1335,8 +1334,24 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcSetSignalingStateChangeCallback(pc.c(), Container.api_callback));
         }
 
-        pub inline fn toOptional(tr: TPeerConnection) OptionalPeerConnection(T) {
-            return @enumFromInt(@intFromEnum(tr));
+        /// Check if the Peer Connection exists and is not closed
+        pub inline fn isClosed(pc: TPeerConnection) error{RtcFailure}!bool {
+            // NOTE(jae): 2026-04-24
+            // Detect closure of a Peer Connection by just checking if description type returns anything
+            _ = handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0)) catch |err| switch (err) {
+                // When getPeerConnection() is called, it returns invalid if it doesn't exist
+                error.RtcInvalid => return true,
+                // If local description is not available, then Peer connection exists
+                error.RtcNotAvailable => return false,
+                // If there is a buffer to return, then the Peer Connection is not closed
+                error.BufferTooSmall => return false,
+                else => |other_err| return other_err,
+            };
+            return false;
+        }
+
+        pub inline fn toOptional(pc: TPeerConnection) OptionalPeerConnection(T) {
+            return @enumFromInt(@intFromEnum(pc));
         }
 
         inline fn c(pc: TPeerConnection) u31 {
@@ -1355,7 +1370,9 @@ pub fn PeerConnection(comptime T: type) type {
     };
 }
 
-fn HandleCallback(comptime HT: type, comptime UT: type) type {
+/// Channel refers to common functions used by DataChannel, Track or Websocket in the libdatachannel C-API.
+/// This isn't used directly by consumers but the logic is shared across the above data types.
+fn Channel(comptime HT: type, comptime UT: type) type {
     return struct {
         pub fn setOpenCallback(handle: HT, comptime callback: *const fn (handle: HT, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
@@ -1381,13 +1398,17 @@ fn HandleCallback(comptime HT: type, comptime UT: type) type {
             return handleWrapError(clib.rtcSetClosedCallback(handle.c(), Container.api_callback));
         }
 
-        // inline fn c(handle: HT) u31 {
-        //     return @intFromEnum(handle);
-        // }
+        pub inline fn isOpen(handle: HT) bool {
+            return clib.rtcIsOpen(handle.c());
+        }
 
-        // inline fn fromC(handle: i32) HT {
-        //     return @enumFromInt(handle);
-        // }
+        pub inline fn isClosed(handle: HT) bool {
+            return clib.rtcIsClosed(handle.c());
+        }
+
+        pub inline fn send(handle: HT, data: []const u8) InvalidOrRuntimeError!void {
+            return try handleWrapError(clib.rtcSendMessage(handle.c(), data.ptr, @intCast(data.len)));
+        }
 
         inline fn toUserPointer(ptr: ?*anyopaque) *UT {
             return @ptrCast(@alignCast(ptr.?));

@@ -9,7 +9,13 @@ const rtc = @import("libdatachannel");
 
 const log = @import("std").log.scoped(.capi_track);
 
+const PeerId = enum {
+    peer1,
+    peer2,
+};
+
 const Peer = struct {
+    id: PeerId,
     state: rtc.State,
     gathering_state: rtc.GatheringState,
     ice_state: rtc.IceState,
@@ -20,11 +26,12 @@ const Peer = struct {
     got_message: bool,
     other_peer: ?*Peer,
 
-    fn init(peer: *Peer, config: rtc.PeerConnectionConfig) !void {
+    fn init(peer: *Peer, id: PeerId, config: rtc.PeerConnectionConfig) !void {
         // Create peer connection
         const pc = try rtc.PeerConnection(Peer).create(peer, config);
         errdefer pc.destroy();
         peer.* = .{
+            .id = id,
             .state = .new,
             .gathering_state = .new,
             .ice_state = .new,
@@ -63,7 +70,7 @@ test "capi connectivity" {
 
     // Create peer 1
     var peer1: Peer = undefined;
-    try peer1.init(.{
+    try peer1.init(.peer1, .{
         // Custom MTU example
         .mtu = 1500,
         .port_range_begin = 7000,
@@ -76,7 +83,7 @@ test "capi connectivity" {
     defer peer1.deinit();
 
     var peer2: Peer = undefined;
-    try peer2.init(.{
+    try peer2.init(.peer2, .{
         .port_range_begin = 7010,
         .port_range_end = 7019,
         // STUN server example
@@ -89,6 +96,14 @@ test "capi connectivity" {
     // Make peers aware of each other
     peer1.other_peer = &peer2;
     peer2.other_peer = &peer1;
+
+    // Check if peer connections are open
+    if (try peer1.pc.isClosed()) {
+        return error.Peer1ShouldNotBeClosed;
+    }
+    if (try peer2.pc.isClosed()) {
+        return error.Peer2ShouldNotBeClosed;
+    }
 
     // Peer 1: Create data channel
     {
@@ -107,6 +122,11 @@ test "capi connectivity" {
         var attempts: u32 = 40;
         while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
             attempts -= 1;
+
+            // If a Zig error occurs the peer connection gets closed
+            if (try peer1.pc.isClosed() or try peer2.pc.isClosed()) {
+                break;
+            }
 
             if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
                 // Deprecated path: Zig 0.15.X or lower
@@ -260,19 +280,20 @@ fn dataChannelOpenCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
     log.info("Peer({}): DataChannel: {} - Open", .{ peer.pc, dc });
     peer.connected = true;
 
-    // TODO: Add logic for testing messageCallback
+    if (!dc.isOpen()) {
+        log.err("isOpen should be true, not false.", .{});
+        return error.DataChannelIsOpenFailed;
+    }
+    if (dc.isClosed()) {
+        log.err("isClosed should be false, not true", .{});
+        return error.DataChannelIsClosedFailed;
+    }
 
-    // if (!dc.isOpen()) {
-    //     log.err("isOpen should be true, not false.");
-    //     return error.DataChannelIsOpenFailed;
-    // }
-    // if (dc.isClosed()) {
-    //     log.err("isClosed should be false, not true");
-    //     return error.DataChannelIsClosedFailed;
-    // }
-
-    // const char *message = peer == peer1 ? "Hello from 1" : "Hello from 2";
-    // rtcSendMessage(peer->dc, message, -1); // negative size indicates a null-terminated string
+    const message = switch (peer.id) {
+        .peer1 => "Hello from 1",
+        .peer2 => "Hello from 2",
+    };
+    try dc.send(message);
 }
 
 fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
@@ -281,13 +302,19 @@ fn dataChannelClosedCallback(dc: rtc.DataChannel(Peer), peer: *Peer) !void {
 }
 
 fn messageCallback(dc: rtc.DataChannel(Peer), kind: rtc.MessageType, data: []const u8, peer: *Peer) !void {
-    peer.got_message = true;
     log.info("Peer({}): DataChannel: {} - message: {s} ({t})", .{ peer.pc, dc, data, kind });
+    const expected_message = switch (peer.id) {
+        .peer1 => "Hello from 2",
+        .peer2 => "Hello from 1",
+    };
+    if (!mem.eql(u8, data, expected_message)) {
+        log.err("Peer({}): DataChannel: {} - expected message '{s}' but got '{s}'", .{ peer.pc, dc, expected_message, data });
+        return error.InvalidMessageFromCallback;
+    }
+    peer.got_message = true;
 }
 
 fn dataChannelCallback(_: rtc.PeerConnection(Peer), dc: rtc.DataChannel(Peer), peer: *Peer) !void {
-    // Peer *peer = (Peer *)ptr;
-
     var label_buf: [256]u8 = undefined;
     const label = try dc.getLabel(&label_buf);
 
