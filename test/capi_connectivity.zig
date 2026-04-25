@@ -78,6 +78,7 @@ test "capi connectivity" {
     // Create peer 1
     var peer1: Peer = undefined;
     try peer1.init(.peer1, .{
+        .bind_address = "127.0.0.1",
         // Custom MTU example
         .mtu = 1500,
         .port_range_begin = 5020,
@@ -91,6 +92,7 @@ test "capi connectivity" {
 
     var peer2: Peer = undefined;
     try peer2.init(.peer2, .{
+        .bind_address = "127.0.0.1",
         .port_range_begin = 5030,
         .port_range_end = 5039,
         // STUN server example

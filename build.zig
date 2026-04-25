@@ -282,7 +282,7 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag != .emscripten) {
         const macro_flags = [_]MacroBool{
             .{ .name = "INET", .value = true },
-            // .{ .name = "INET6", .value = true },
+            .{ .name = "INET6", .value = true },
             // .{ .name = "HAVE_SA_LEN", .value = true },
             // .{ .name = "HAVE_SIN_LEN", .value = true },
             // Define this if your IPv6 has sin6_len in sockaddr_in6 struct.
