@@ -52,19 +52,15 @@ pub fn build(b: *std.Build) !void {
             .emscripten = {},
         },
         .openssl => {
-            // TODO: Add support for openssl
-            const dep = b.lazyDependency("openssl", .{}) orelse return error.MissingDependency;
-            const ssl_dep = dep.path("");
-            _ = ssl_dep; // autofix
+            const dep = b.lazyDependency("openssl", .{
+                .target = target,
+                .optimize = optimize,
+            }) orelse return error.MissingDependency;
 
-            std.debug.panic("TODO: Add support for openssl", .{});
-
-            // const libcrypto = try build_openssl.libcrypto(b, ssl_dep, target, optimize);
-            // const libssl = try build_openssl.libssl(b, ssl_dep, target, optimize);
             break :tlsdepblk TlsDep{
                 .openssl = .{
-                    .libcrypto = undefined,
-                    .libssl = undefined,
+                    .libcrypto = dep.artifact("crypto"),
+                    .libssl = dep.artifact("ssl"),
                 },
             };
         },
@@ -202,7 +198,8 @@ pub fn build(b: *std.Build) !void {
                 mod.addIncludePath(libsrtp_path.path(b, "include"));
                 switch (tls_dep) {
                     .emscripten => {}, // No-op
-                    .openssl => {
+                    .openssl => |openssl_dep| {
+                        _ = openssl_dep;
                         // @panic("TODO: Handle this");
                     },
                     .mbedtls => |mbedtls_dep| {
@@ -232,8 +229,8 @@ pub fn build(b: *std.Build) !void {
             // do nothing for emscripten
         },
         .openssl => |openssl| {
-            libdatachannel_mod.linkLibrary(openssl.libcrypto);
-            libdatachannel_mod.linkLibrary(openssl.libssl);
+            libdatachannel_lib_mod.linkLibrary(openssl.libcrypto);
+            libdatachannel_lib_mod.linkLibrary(openssl.libssl);
         },
         // mbedtls
         .mbedtls => |mbedtls| {

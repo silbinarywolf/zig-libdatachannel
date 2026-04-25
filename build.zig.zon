@@ -46,11 +46,14 @@
             .hash = "N-V-__8AAC2JdgGk1QZ0JtMgz66B5s5rzNjQkloMXFw-jo86",
             .lazy = true,
         },
-        .openssl = .{
-            .url = "git+https://github.com/kassane/openssl-zig#41cd1e69926ff97732ee30efa5833029f1b39897",
-            .hash = "openssl-3.6.0-wZcA72dm8QEEc7oadIq7LkStu7kvDY-PYQdaTRNNt9LP",
-            .lazy = true,
-        },
+        // NOTE(jae): 2026-04-25
+        // The Openssl-Zig repo does not work as of this commit as it's not including a few relied upon
+        // C files: https://github.com/kassane/openssl-zig/commits/zig-pkg/41cd1e69926ff97732ee30efa5833029f1b39897
+        // .openssl = .{
+        //     .url = "git+https://github.com/kassane/openssl-zig#41cd1e69926ff97732ee30efa5833029f1b39897",
+        //     .hash = "openssl-3.6.0-wZcA72dm8QEEc7oadIq7LkStu7kvDY-PYQdaTRNNt9LP",
+        //     .lazy = true,
+        // },
     },
     .paths = .{
         "LICENSE",

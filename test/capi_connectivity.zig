@@ -66,6 +66,8 @@ test "capi connectivity" {
     rtc.preload();
     defer rtc.cleanup();
 
+    rtc.initLogger(.debug, rtc.defaultZigLogger);
+
     const gpa = testing.allocator;
 
     // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file

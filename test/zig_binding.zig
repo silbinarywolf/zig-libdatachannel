@@ -8,7 +8,6 @@ test "PeerConnection, DataChannel and Track isOpen/isClosed" {
     rtc.preload();
     defer rtc.cleanup();
 
-    // NOTE: If more than one test calls this, it can eventually deadlock as its not thread-safe.
     rtc.initLogger(.none, null);
 
     var valid_peer_connection: rtc.PeerConnection(void) = try .create({}, .{});

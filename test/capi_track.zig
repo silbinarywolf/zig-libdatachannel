@@ -63,7 +63,6 @@ test "capi track" {
     rtc.preload();
     defer rtc.cleanup();
 
-    // NOTE: If more than one test calls this, it can eventually deadlock as its not thread-safe.
     rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     // Create peer 1
