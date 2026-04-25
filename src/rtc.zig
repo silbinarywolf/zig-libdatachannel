@@ -332,25 +332,41 @@ pub const IceState = enum(u3) {
 };
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/signalingState
-pub const SignalingState = enum(u3) {
+pub const SignalingState = enum(u8) {
     /// There is no ongoing exchange of offer and answer underway. This may mean that the RTCPeerConnection
     /// object is new, in which case both the localDescription and remoteDescription are null;
     ///
     /// it may also mean that negotiation is complete and a connection has been established.
-    stable = clib.RTC_SIGNALING_STABLE,
+    stable = 0,
     /// The local peer has called RTCPeerConnection.setLocalDescription(), passing in SDP representing an offer
-    have_local_offer = clib.RTC_SIGNALING_HAVE_LOCAL_OFFER,
+    have_local_offer = 1,
     /// The remote peer has created an offer and used the signaling server to deliver it to the local peer, which has set the
     /// offer as the remote description by calling RTCPeerConnection.setRemoteDescription().
-    have_remote_offer = clib.RTC_SIGNALING_HAVE_REMOTE_OFFER,
+    have_remote_offer = 2,
     /// The offer sent by the remote peer has been applied and an answer has been created (usually by calling RTCPeerConnection.createAnswer())
     /// and applied by calling RTCPeerConnection.setLocalDescription().
-    have_local_pranswer = clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER,
+    have_local_pranswer = 3,
     /// A provisional answer has been received and applied in response to an offer previously sent and established by calling setLocalDescription().
-    have_remote_pranswer = clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER,
+    have_remote_pranswer = 4,
+    /// Invalid value, not provided by C-API in libdatachannel but allows for storing uninitialized state
+    /// on a consumer struct easier.
+    unknown = 255,
+
+    inline fn c(state: SignalingState) u8 {
+        return @intFromEnum(state);
+    }
 
     inline fn fromC(state: clib.rtcSignalingState) SignalingState {
         return @enumFromInt(state);
+    }
+
+    comptime {
+        assert(SignalingState.stable.c() == clib.RTC_SIGNALING_STABLE);
+        assert(SignalingState.have_local_offer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_OFFER);
+        assert(SignalingState.have_remote_offer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_OFFER);
+        assert(SignalingState.have_local_pranswer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER);
+        assert(SignalingState.have_remote_pranswer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER);
+        assert(SignalingState.unknown.c() == 255); // No mapping to RTC
     }
 };
 

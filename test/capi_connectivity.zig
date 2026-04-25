@@ -5,6 +5,8 @@ const mem = @import("std").mem;
 const testing = @import("std").testing;
 const builtin = @import("builtin");
 
+const RetryUntil = @import("RetryUntil.zig");
+
 const rtc = @import("libdatachannel");
 
 const log = @import("std").log.scoped(.capi_track);
@@ -19,7 +21,7 @@ const Peer = struct {
     state: rtc.State,
     gathering_state: rtc.GatheringState,
     ice_state: rtc.IceState,
-    signalling_state: ?rtc.SignalingState,
+    signalling_state: rtc.SignalingState,
     pc: rtc.PeerConnection(Peer),
     dc: rtc.OptionalDataChannel(Peer),
     connected: bool,
@@ -35,7 +37,7 @@ const Peer = struct {
             .state = .new,
             .gathering_state = .new,
             .ice_state = .new,
-            .signalling_state = null,
+            .signalling_state = .unknown,
             .pc = pc,
             .dc = .none,
             .connected = false,
@@ -63,12 +65,26 @@ const Peer = struct {
 };
 
 test "capi connectivity" {
+    if (builtin.os.tag == .macos) {
+        // error: 'capi_connectivity.test.capi connectivity' failed:
+        //     [capi_track] (err): Peer(@enumFromInt(1)): Candidate: candidate:1 1 UDP 2114977791 192.168.64.8 5020 typ host, mid: 0, other peer: @enumFromInt(2)
+        //     [capi_track] (err): Peer(@enumFromInt(2)): Candidate: candidate:1 1 UDP 2114977791 192.168.64.8 5031 typ host, mid: 0, other peer: @enumFromInt(1)
+        //     [libdatachannel] (err): rtc::impl::PeerConnection::initSctpTransport@358: Could not bind usrsctp socket, errno=49
+        //     [libdatachannel] (err): rtc::impl::PeerConnection::initSctpTransport@358: Could not bind usrsctp socket, errno=49
+        //     [libdatachannel] (warn): rtc::impl::Transport::changeState@66: SCTP transport initialization failed
+        //     [libdatachannel] (warn): rtc::impl::Transport::changeState@66: SCTP transport initialization failed
+        //     [capi_track] (err): peer 1 state: closed, peer 2 state: closed
+        log.info("skipping macos, unable to bind usrsctp socket on Github Actions for unknown reasons", .{});
+        return;
+    }
+
     rtc.preload();
     defer rtc.cleanup();
 
     rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     const gpa = testing.allocator;
+    const io = testing.io;
 
     // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file
     // I've observed up to 35000 bytes before, so lets make our SDP buffer large.
@@ -126,23 +142,9 @@ test "capi connectivity" {
 
     // Wait for connection
     {
-        var attempts: u32 = 40;
-        while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
-            attempts -= 1;
-
-            if (peer1.state == .closed or peer2.state == .closed) {
-                // If connections were closed early then stop waiting
-                // (Observed in MacOS Github Action tests)
-                log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
-                return error.PeerConnectionClosed;
-            }
-
-            if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
-                // Deprecated path: Zig 0.15.X or lower
-                @import("std").Thread.sleep(250 * 1000000);
-            } else {
-                try testing.io.sleep(.fromMilliseconds(250), .boot);
-            }
+        var wait_for_connection = RetryUntil.init(io, .{});
+        while (try wait_for_connection.check(peer1.connected and peer2.connected)) {
+            // Keep looping until condition met
         }
         if (peer1.state != .connected or peer2.state != .connected) {
             log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
@@ -159,9 +161,6 @@ test "capi connectivity" {
         }
         if (!peer1.got_message or !peer2.got_message) {
             return error.DataChannelMessageNotSentOrReceived;
-        }
-        if (attempts == 0) {
-            return error.ExhaustedAttempts;
         }
     }
 
