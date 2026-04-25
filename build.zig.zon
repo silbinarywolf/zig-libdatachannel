@@ -12,8 +12,8 @@
         // - libsrtp (as submodule by default) required if compiled with media support.
         // - nlohmann JSON (as submodule by default) required to build examples.
         .libdatachannel_cpp = .{
-            .url = "git+https://github.com/paullouisageneau/libdatachannel#082f2dacabe82c1ef970ba38e596aeb454ea1372",
-            .hash = "N-V-__8AAPcmOAMvwMkbynYXuLPXyHwpDyPDxmrXRdeFk8fu",
+            .url = "git+https://github.com/paullouisageneau/libdatachannel#bb5e11a122b0020baab9bd67056ed978b3d543fc",
+            .hash = "N-V-__8AAI4jOQMtuHI79PVZ4zU7KFUuF0si3v1egVSD8nuI",
         },
         .libdatachannel_wasm = .{
             .url = "git+https://github.com/paullouisageneau/datachannel-wasm#v0.4.0",
