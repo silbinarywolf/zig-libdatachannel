@@ -260,9 +260,7 @@ fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type
 }
 
 fn candidateCallback(pc: rtc.PeerConnection(Peer), candidate: [:0]const u8, mid: [:0]const u8, peer: *Peer) !void {
-    if (builtin.os.tag == .macos) {
-        log.err("Peer({}): Candidate: {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
-    }
+    log.info("Peer({}): Candidate: {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
 
     const other = peer.other_peer.?;
     try other.pc.addRemoteCandidate(candidate, mid);
