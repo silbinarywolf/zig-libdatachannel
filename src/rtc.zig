@@ -350,7 +350,7 @@ pub const SignalingState = enum(u7) {
     have_remote_pranswer = 4,
     /// Invalid value, not provided by C-API in libdatachannel but allows for storing uninitialized state
     /// on a consumer struct easier.
-    unknown = maxInt(u7),
+    unknown = 127,
 
     inline fn c(state: SignalingState) u8 {
         return @intFromEnum(state);
@@ -366,7 +366,7 @@ pub const SignalingState = enum(u7) {
         assert(SignalingState.have_remote_offer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_OFFER);
         assert(SignalingState.have_local_pranswer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER);
         assert(SignalingState.have_remote_pranswer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER);
-        assert(SignalingState.unknown.c() == maxInt(u7)); // No mapping to RTC
+        assert(SignalingState.unknown.c() == maxInt(u7)); // No mapping to libdatachannel, Zig bindings only
     }
 };
 
