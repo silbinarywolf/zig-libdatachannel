@@ -78,7 +78,6 @@ test "capi connectivity" {
     // Create peer 1
     var peer1: Peer = undefined;
     try peer1.init(.peer1, .{
-        .bind_address = "127.0.0.1",
         // Custom MTU example
         .mtu = 1500,
         .port_range_begin = 5020,
@@ -92,7 +91,6 @@ test "capi connectivity" {
 
     var peer2: Peer = undefined;
     try peer2.init(.peer2, .{
-        .bind_address = "127.0.0.1",
         .port_range_begin = 5030,
         .port_range_end = 5039,
         // STUN server example
@@ -263,7 +261,7 @@ fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type
 }
 
 fn candidateCallback(pc: rtc.PeerConnection(Peer), candidate: [:0]const u8, mid: [:0]const u8, peer: *Peer) !void {
-    log.info("Peer({}): Candidate: {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
+    log.err("Peer({}): Candidate: {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
 
     const other = peer.other_peer.?;
     try other.pc.addRemoteCandidate(candidate, mid);
