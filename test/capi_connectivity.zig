@@ -79,9 +79,9 @@ test "capi connectivity" {
     var peer1: Peer = undefined;
     try peer1.init(.peer1, .{
         // Custom MTU example
-        // .mtu = 1500,
-        // .port_range_begin = 5020,
-        // .port_range_end = 5029,
+        .mtu = 1500,
+        .port_range_begin = 5020,
+        .port_range_end = 5029,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -91,8 +91,8 @@ test "capi connectivity" {
 
     var peer2: Peer = undefined;
     try peer2.init(.peer2, .{
-        // .port_range_begin = 5030,
-        // .port_range_end = 5039,
+        .port_range_begin = 5030,
+        .port_range_end = 5039,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",

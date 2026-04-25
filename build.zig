@@ -81,7 +81,7 @@ pub fn build(b: *std.Build) !void {
         },
     };
 
-    const root_macro_flags = [_]MacroBool{
+    const libdatachannel_macro_flags = [_]MacroBool{
         .{ .name = "RTC_ENABLE_WEBSOCKET", .value = false },
         .{ .name = "RTC_ENABLE_MEDIA", .value = true },
         .{ .name = "USE_MBEDTLS", .value = tls_option == .mbedtls },
@@ -110,7 +110,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
             .root_source_file = b.path("src/rtc.c"),
         });
-        for (root_macro_flags) |macro| {
+        for (libdatachannel_macro_flags) |macro| {
             c_translate.defineCMacro(macro.name, macro.valueString());
         }
         c_translate.addIncludePath(libdatachannel_dep.include);
@@ -127,7 +127,7 @@ pub fn build(b: *std.Build) !void {
             .link_libcpp = true,
         });
         mod.addCMacro("RTC_EXPORTS", "1");
-        for (root_macro_flags) |macro| {
+        for (libdatachannel_macro_flags) |macro| {
             mod.addCMacro(macro.name, macro.valueString());
         }
         switch (target.result.os.tag) {
@@ -282,7 +282,7 @@ pub fn build(b: *std.Build) !void {
     if (target.result.os.tag != .emscripten) {
         const macro_flags = [_]MacroBool{
             .{ .name = "INET", .value = true },
-            .{ .name = "INET6", .value = true },
+            // .{ .name = "INET6", .value = true },
             // .{ .name = "HAVE_SA_LEN", .value = true },
             // .{ .name = "HAVE_SIN_LEN", .value = true },
             // Define this if your IPv6 has sin6_len in sockaddr_in6 struct.
