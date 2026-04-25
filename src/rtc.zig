@@ -11,6 +11,7 @@ const span = @import("std").mem.span;
 const StaticStringMap = @import("std").StaticStringMap;
 const writeStackTrace = @import("std").debug.writeStackTrace;
 const builtin = @import("builtin");
+const Allocator = @import("std").mem.Allocator;
 
 const clib = @import("clibdatachannel");
 
@@ -331,25 +332,41 @@ pub const IceState = enum(u3) {
 };
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/signalingState
-pub const SignalingState = enum(u3) {
+pub const SignalingState = enum(u7) {
     /// There is no ongoing exchange of offer and answer underway. This may mean that the RTCPeerConnection
     /// object is new, in which case both the localDescription and remoteDescription are null;
     ///
     /// it may also mean that negotiation is complete and a connection has been established.
-    stable = clib.RTC_SIGNALING_STABLE,
+    stable = 0,
     /// The local peer has called RTCPeerConnection.setLocalDescription(), passing in SDP representing an offer
-    have_local_offer = clib.RTC_SIGNALING_HAVE_LOCAL_OFFER,
+    have_local_offer = 1,
     /// The remote peer has created an offer and used the signaling server to deliver it to the local peer, which has set the
     /// offer as the remote description by calling RTCPeerConnection.setRemoteDescription().
-    have_remote_offer = clib.RTC_SIGNALING_HAVE_REMOTE_OFFER,
+    have_remote_offer = 2,
     /// The offer sent by the remote peer has been applied and an answer has been created (usually by calling RTCPeerConnection.createAnswer())
     /// and applied by calling RTCPeerConnection.setLocalDescription().
-    have_local_pranswer = clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER,
+    have_local_pranswer = 3,
     /// A provisional answer has been received and applied in response to an offer previously sent and established by calling setLocalDescription().
-    have_remote_pranswer = clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER,
+    have_remote_pranswer = 4,
+    /// Invalid value, not provided by C-API in libdatachannel but allows for storing uninitialized state
+    /// on a consumer struct easier.
+    unknown = 127,
+
+    inline fn c(state: SignalingState) u8 {
+        return @intFromEnum(state);
+    }
 
     inline fn fromC(state: clib.rtcSignalingState) SignalingState {
         return @enumFromInt(state);
+    }
+
+    comptime {
+        assert(SignalingState.stable.c() == clib.RTC_SIGNALING_STABLE);
+        assert(SignalingState.have_local_offer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_OFFER);
+        assert(SignalingState.have_remote_offer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_OFFER);
+        assert(SignalingState.have_local_pranswer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER);
+        assert(SignalingState.have_remote_pranswer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER);
+        assert(SignalingState.unknown.c() == maxInt(u7)); // No mapping to libdatachannel, Zig bindings only
     }
 };
 
@@ -594,6 +611,159 @@ pub const NackResponderConfig = struct {
     };
 };
 
+/// Returned from call to DataChannel.getReliability
+pub const DataChannelReliability = struct {
+    unordered: bool,
+    unreliable: bool,
+    maxPacketLifeTime: u32,
+    maxRetransmits: u32,
+};
+
+pub fn OptionalDataChannel(comptime T: type) type {
+    return enum(u32) {
+        none = maxInt(u32),
+        _,
+
+        pub inline fn unwrap(ot: @This()) ?DataChannel(T) {
+            if (ot == .none) return null;
+            return @enumFromInt(@intFromEnum(ot));
+        }
+
+        pub inline fn fromOptional(ot: ?DataChannel(T)) @This() {
+            return if (ot) |t| t.toOptional() else .none;
+        }
+    };
+}
+
+/// If both maxPacketLifeTime or maxRetransmits are unset (0), the channel is reliable.
+/// If has maxPacketLifeTime or maxRetransmits is set, the channel is unreliable.
+pub const DataChannelReliabilityConfig = union(enum) {
+    reliable: void,
+    /// Time window during which transmissions and retransmissions may occur
+    maxPacketLifeTime: u32,
+    /// Maximum number of retransmissions that are attempted
+    maxRetransmits: u32,
+};
+
+pub const DataChannelConfig = struct {
+    /// If true, the channel does not enforce message ordering and out-of-order delivery is allowed
+    unordered: bool = false,
+    /// If both maxPacketLifeTime or maxRetransmits are unset (0), the channel is reliable.
+    /// If has maxPacketLifeTime or maxRetransmits is set, the channel is unreliable.
+    reliability: DataChannelReliabilityConfig = .reliable,
+    protocol: ?[:0]const u8 = null,
+    negotiated: bool = false,
+    stream: ?u16 = null,
+};
+
+pub const MessageType = enum(u1) {
+    binary = 0,
+    string = 1,
+};
+
+/// DataChannel implicitly inherits PeerConnection 'setUserPointer'
+pub fn DataChannel(comptime T: type) type {
+    return enum(u31) {
+        _,
+
+        /// Closes the data channel without removing it, unlike destroy()
+        ///
+        /// This does not block like destroy()
+        pub inline fn close(dc: CDataChannel) void {
+            // NOTE(jae): 2026-04-23
+            // rtcClose() = closes DataChannels, Tracks and WebSockets
+            return handleWrapError(clib.rtcClose(dc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid data channel id given: {}", .{dc});
+                },
+                else => unreachable,
+            };
+        }
+
+        /// Closes the data channel and removes it
+        ///
+        /// This function will block until all scheduled callbacks return
+        /// (except the one this function might be called in) and no other callback will be called after it returns.
+        pub inline fn destroy(dc: CDataChannel) void {
+            return handleWrapError(clib.rtcDeleteDataChannel(dc.c())) catch |err| switch (err) {
+                error.RtcInvalid => {
+                    if (builtin.mode == .Debug)
+                        panic("Invalid data channel id given: {}", .{dc});
+                },
+                else => unreachable,
+            };
+        }
+
+        /// Set user pointer for data channel and change its user-pointer from the one it inherits from PeerConnection
+        /// Returns newly typed Data Channel.
+        pub inline fn setUserPointer(dc: CDataChannel, comptime NT: type, userdata: *NT) DataChannel(NT) {
+            if (T == NT) @compileError("setUserPointer redundant call, setting to the type it already is");
+            clib.rtcSetUserPointer(dc.c(), userdata);
+            return @enumFromInt(@intFromEnum(dc));
+        }
+
+        pub inline fn getLabel(dc: CDataChannel, buf: []u8) BufferError![:0]u8 {
+            const size = try handleSizeWrapError(clib.rtcGetDataChannelLabel(dc.c(), buf.ptr, @intCast(buf.len)));
+            return buf[0 .. size - 1 :0];
+        }
+
+        /// Get the string name used for the sub-protocol used, for example, it could be "json", "raw" or any other user-defined string
+        pub inline fn getProtocol(dc: CDataChannel, buf: []u8) BufferError![:0]u8 {
+            const size = try handleSizeWrapError(clib.rtcGetDataChannelProtocol(dc.c(), buf.ptr, @intCast(buf.len)));
+            return buf[0 .. size - 1 :0];
+        }
+
+        pub inline fn getReliability(dc: CDataChannel) InvalidOrRuntimeError!DataChannelReliability {
+            var res: clib.rtcReliability = undefined;
+            try handleWrapError(clib.rtcGetDataChannelReliability(dc.c(), &res));
+            return DataChannelReliability{
+                .unordered = res.unordered,
+                .unreliable = res.unreliable,
+                .maxPacketLifeTime = res.maxPacketLifeTime,
+                .maxRetransmits = res.maxRetransmits,
+            };
+        }
+
+        // C-bindings for libdatachannel share the same C-API functions for across DataChannel, Track and Websockets.
+
+        pub const isOpen = Channel(CDataChannel, T).isOpen;
+        pub const isClosed = Channel(CDataChannel, T).isClosed;
+        pub const setOpenCallback = Channel(CDataChannel, T).setOpenCallback;
+        pub const setClosedCallback = Channel(CDataChannel, T).setClosedCallback;
+        pub const setMessageCallback = Channel(CDataChannel, T).setMessageCallback;
+        pub const send = Channel(CDataChannel, T).send;
+        pub const receiveSize = Channel(CDataChannel, T).receiveSize;
+        pub const receive = Channel(CDataChannel, T).receive;
+
+        inline fn c(dc: CDataChannel) u31 {
+            return @intFromEnum(dc);
+        }
+
+        inline fn fromC(dc: c_int) CDataChannel {
+            return @enumFromInt(dc);
+        }
+
+        inline fn toUserPointer(ptr: ?*anyopaque) *T {
+            return @ptrCast(@alignCast(ptr.?));
+        }
+
+        pub inline fn toOptional(tr: CDataChannel) OptionalDataChannel(T) {
+            return @enumFromInt(@intFromEnum(tr));
+        }
+
+        fn handleErrorResult(dc: CDataChannel, err: anyerror, _: *T) void {
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
+
+            // Close the data channel on error
+            logrtc.err("unhandled error occurred with data channel({}): {s}", .{ dc, @errorName(err) });
+            dc.close();
+        }
+
+        const CDataChannel = @This();
+    };
+}
+
 pub fn OptionalTrack(comptime T: type) type {
     return enum(u32) {
         none = maxInt(u32),
@@ -646,10 +816,10 @@ pub fn Track(comptime T: type) type {
 
         /// Set user pointer for track and change its user-pointer from the one it inherits from PeerConnection
         /// Returns newly typed Track.
-        pub inline fn setUserPointer(pc: CTrack, comptime NT: type, userdata: *NT) Track(NT) {
+        pub inline fn setUserPointer(tr: CTrack, comptime NT: type, userdata: *NT) Track(NT) {
             if (T == NT) @compileError("setUserPointer redundant call, setting to the type it already is");
-            clib.rtcSetUserPointer(pc.c(), userdata);
-            return @enumFromInt(@intFromEnum(pc));
+            clib.rtcSetUserPointer(tr.c(), userdata);
+            return @enumFromInt(@intFromEnum(tr));
         }
 
         /// Return media description for the video or audio track
@@ -690,14 +860,6 @@ pub fn Track(comptime T: type) type {
             return try handleWrapError(clib.rtcRequestKeyframe(tr.c()));
         }
 
-        pub inline fn isOpen(tr: CTrack) bool {
-            return clib.rtcIsOpen(tr.c());
-        }
-
-        pub inline fn send(tr: CTrack, data: []const u8) InvalidOrRuntimeError!void {
-            return try handleWrapError(clib.rtcSendMessage(tr.c(), data.ptr, @intCast(data.len)));
-        }
-
         /// add RtcpReceivingSession media handler
         pub inline fn chainRtcpReceivingSession(tr: CTrack) InvalidOrRuntimeError!void {
             return handleWrapError(clib.rtcChainRtcpReceivingSession(tr.c()));
@@ -728,54 +890,22 @@ pub fn Track(comptime T: type) type {
             return @enumFromInt(@intFromEnum(tr));
         }
 
-        pub fn setOpenCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    return callback(self, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetOpenCallback(tr.c(), Container.api_callback));
-        }
+        // C-bindings for libdatachannel share the same C-API functions for across DataChannel, Track and Websockets.
 
-        pub fn setClosedCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    return callback(self, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetClosedCallback(tr.c(), Container.api_callback));
-        }
+        pub const isOpen = Channel(CTrack, T).isOpen;
+        pub const isClosed = Channel(CTrack, T).isClosed;
+        pub const setOpenCallback = Channel(CTrack, T).setOpenCallback;
+        pub const setClosedCallback = Channel(CTrack, T).setClosedCallback;
+        pub const setMessageCallback = Channel(CTrack, T).setMessageCallback;
+        pub const send = Channel(CTrack, T).send;
 
         pub fn setErrorCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, error_message: [:0]const u8, userdata: *T) void) InvalidOrRuntimeError!void {
             const Container = struct {
-                pub fn api_callback(_track_id: c_int, _error: [*c]const u8, _userdata: ?*anyopaque) callconv(.c) void {
-                    return callback(.fromC(_track_id), fromConstCString(_error), @ptrCast(@alignCast(_userdata)));
+                pub fn api_callback(_id: c_int, _error: [*c]const u8, _userdata: ?*anyopaque) callconv(.c) void {
+                    return callback(.fromC(_id), fromConstCString(_error), @ptrCast(@alignCast(_userdata)));
                 }
             };
             return handleWrapError(clib.rtcSetErrorCallback(tr.c(), Container.api_callback));
-        }
-
-        pub fn setMessageCallback(tr: CTrack, comptime callback: *const fn (track: CTrack, message: []const u8, userdata: *T) anyerror!void) InvalidOrRuntimeError!void {
-            const Container = struct {
-                pub fn api_callback(_track_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
-                    const self: CTrack = .fromC(_track_id);
-                    const ud = toUserPointer(_userdata);
-                    const msg: []const u8 = if (size < 0)
-                        // Negative size means null-terminated pointer
-                        @as([:0]const u8, _message[0..@intCast(-size) :0])
-                    else
-                        @as([]const u8, _message[0..@intCast(size)]);
-                    return callback(.fromC(_track_id), msg, ud) catch |err|
-                        handleErrorResult(self, err, ud);
-                }
-            };
-            return handleWrapError(clib.rtcSetMessageCallback(tr.c(), Container.api_callback));
         }
 
         inline fn c(tr: CTrack) u31 {
@@ -791,11 +921,9 @@ pub fn Track(comptime T: type) type {
         }
 
         fn handleErrorResult(tr: CTrack, err: anyerror, _: *T) void {
-            // if (Options.error_handler) |error_handler| {
-            //     return error_handler(pc, err, userdata);
-            // }
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
 
-            // Close the track on error for non-debug
+            // Close the track on error
             logrtc.err("unhandled error occurred with track({}): {s}", .{ tr, @errorName(err) });
             tr.close();
         }
@@ -865,10 +993,7 @@ pub fn PeerConnection(comptime T: type) type {
         _,
 
         fn handleErrorResult(pc: TPeerConnection, err: anyerror, _: *T) void {
-            // TODO: Consider allowing custom global error handler
-            // if (Options.error_handler) |error_handler| {
-            //     return error_handler(@enumFromInt(pc.c()), err, userdata);
-            // }
+            // TODO: Consider allowing custom global error handler for peer connections, tracks, etc
 
             // Close peer connection on error
             logrtc.err("unhandled error occurred with peer connection({}): {s}", .{ pc, @errorName(err) });
@@ -880,7 +1005,6 @@ pub fn PeerConnection(comptime T: type) type {
         else
             *T;
 
-        /// create
         pub fn create(userdata: CreateType, config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
             const pc = try createOpaque(config);
             errdefer pc.destroy();
@@ -890,7 +1014,7 @@ pub fn PeerConnection(comptime T: type) type {
             };
         }
 
-        fn createOpaque(config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
+        inline fn createOpaque(config: PeerConnectionConfig) InvalidOrRuntimeError!TPeerConnection {
             const pc_c = try handleIdWrapError(clib.rtcCreatePeerConnection(&.{
                 // NOTE(jae): 2026-03-15
                 // Use const-casting since the given C strings are read-from + copied immediately and to improve
@@ -934,7 +1058,7 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcDeletePeerConnection(pc.c())) catch |err| switch (err) {
                 error.RtcInvalid => {
                     if (builtin.mode == .Debug)
-                        panic("Invalid peer connection id given: {}", .{pc});
+                        panic("invalid peer connection id given: {}", .{pc});
                 },
                 else => unreachable,
             };
@@ -951,6 +1075,31 @@ pub fn PeerConnection(comptime T: type) type {
         pub inline fn internalSetUserPointer(pc: TPeerConnection, comptime NT: type, userdata: *NT) PeerConnection(NT) {
             clib.rtcSetUserPointer(pc.c(), userdata);
             return @enumFromInt(@intFromEnum(pc));
+        }
+
+        pub fn createDataChannel(pc: TPeerConnection, label: [:0]const u8, config: DataChannelConfig) InvalidOrRuntimeError!DataChannel(T) {
+            return .fromC(try handleIdWrapError(clib.rtcCreateDataChannelEx(pc.c(), label, &clib.rtcDataChannelInit{
+                .reliability = .{
+                    .unordered = config.unordered,
+                    .unreliable = switch (config.reliability) {
+                        .reliable => false,
+                        .maxPacketLifeTime => true,
+                        .maxRetransmits => true,
+                    },
+                    .maxPacketLifeTime = switch (config.reliability) {
+                        .maxPacketLifeTime => |v| v,
+                        else => undefined,
+                    },
+                    .maxRetransmits = switch (config.reliability) {
+                        .maxRetransmits => |v| v,
+                        else => undefined,
+                    },
+                },
+                .negotiated = config.negotiated,
+                .protocol = if (config.protocol) |v| v else null,
+                .manualStream = config.stream != null,
+                .stream = if (config.stream) |v| v else undefined,
+            })));
         }
 
         /// Add a track via a media description sdp like:
@@ -1011,6 +1160,13 @@ pub fn PeerConnection(comptime T: type) type {
             return size;
         }
 
+        /// Get the length of the local description (including null-terminating byte)
+        /// See "getLocalDescription" to get the result and put it into a buffer.
+        pub inline fn getLocalDescriptionSize(pc: TPeerConnection) BufferOrNotAvailableError!u31 {
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0));
+            return size;
+        }
+
         pub inline fn getLocalDescription(pc: TPeerConnection, buf: []u8) BufferOrNotAvailableError![:0]u8 {
             const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), buf.ptr, @intCast(buf.len)));
             return buf[0 .. size - 1 :0];
@@ -1021,15 +1177,24 @@ pub fn PeerConnection(comptime T: type) type {
             return buf[0 .. size - 1 :0];
         }
 
-        /// Get the length of the local description (including null-terminating byte)
-        /// See "getLocalDescription" to get the result and put it into a buffer.
-        pub inline fn getLocalDescriptionSize(pc: TPeerConnection) BufferOrNotAvailableError!u31 {
-            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0));
-            return size;
-        }
-
         pub inline fn setRemoteDescription(pc: TPeerConnection, sdp: [:0]const u8, sdp_type: SdpType) InvalidOrRuntimeError!void {
             return try handleWrapError(clib.rtcSetRemoteDescription(pc.c(), sdp, sdp_type.toCString()));
+        }
+
+        /// Get the SDP type of the local description
+        pub inline fn getLocalDescriptionType(pc: TPeerConnection) BufferOrNotAvailableError!SdpType {
+            var buf: [12]u8 = undefined;
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetLocalDescriptionType(pc.c(), &buf, @intCast(buf.len)));
+            const sdp_type_as_c_string = buf[0 .. size - 1 :0];
+            return SdpType.fromString(sdp_type_as_c_string);
+        }
+
+        /// Get the SDP type of the remote description
+        pub inline fn getRemoteDescriptionType(pc: TPeerConnection) BufferOrNotAvailableError!SdpType {
+            var buf: [12]u8 = undefined;
+            const size = try handleSizeNotAvailableWrapError(clib.rtcGetRemoteDescriptionType(pc.c(), &buf, @intCast(buf.len)));
+            const sdp_type_as_c_string = buf[0 .. size - 1 :0];
+            return SdpType.fromString(sdp_type_as_c_string);
         }
 
         /// Start the handshake by setting the local description.
@@ -1058,6 +1223,18 @@ pub fn PeerConnection(comptime T: type) type {
 
         pub fn isNegotiationNeeded(pc: TPeerConnection) bool {
             return clib.rtcIsNegotiationNeeded(pc.c());
+        }
+
+        pub fn setDataChannelCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, DataChannel(T), *T) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_pc: c_int, _tr: c_int, _ptr: ?*anyopaque) callconv(.c) void {
+                    const self: TPeerConnection = .fromC(_pc);
+                    const ud = toUserPointer(_ptr);
+                    return callback(self, .fromC(_tr), toUserPointer(_ptr)) catch |err|
+                        handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetDataChannelCallback(pc.c(), Container.api_callback));
         }
 
         pub fn setTrackCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, Track(T), *T) anyerror!void) InvalidOrRuntimeError!void {
@@ -1108,7 +1285,7 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcSetStateChangeCallback(pc.c(), Container.api_callback));
         }
 
-        pub fn setIceStateChangeCallback(pc: TPeerConnection, comptime callback: *const fn (PeerConnection, IceState, *T) anyerror!void) InvalidOrRuntimeError!void {
+        pub fn setIceStateChangeCallback(pc: TPeerConnection, comptime callback: *const fn (TPeerConnection, IceState, *T) anyerror!void) InvalidOrRuntimeError!void {
             const Container = struct {
                 pub fn api_callback(_pc: c_int, _ice_state: clib.rtcIceState, _userdata: ?*anyopaque) callconv(.c) void {
                     const self: TPeerConnection = .fromC(_pc);
@@ -1144,23 +1321,140 @@ pub fn PeerConnection(comptime T: type) type {
             return handleWrapError(clib.rtcSetSignalingStateChangeCallback(pc.c(), Container.api_callback));
         }
 
-        pub inline fn toOptional(tr: TPeerConnection) OptionalPeerConnection(T) {
-            return @enumFromInt(@intFromEnum(tr));
+        /// Returns true if a Peer connection has had "destroy()" called or is invalid.
+        ///
+        /// NOTE: This function mostly exists to improve test-code and early exit if a callback causes a Peer Connection to be closed.
+        pub inline fn isInvalidOrDestroyed(pc: TPeerConnection) bool {
+            // NOTE(jae): 2026-04-24
+            // Detect closure of a Peer Connection by just checking if description type returns anything
+            _ = handleSizeNotAvailableWrapError(clib.rtcGetLocalDescription(pc.c(), null, 0)) catch |err| switch (err) {
+                // When getPeerConnection() is called, it returns invalid if it doesn't exist
+                error.RtcInvalid => return false,
+                // If local description is not available, then Peer connection exists
+                error.RtcNotAvailable,
+                // If there is a buffer to return, then the Peer Connection exists
+                error.BufferTooSmall,
+                => return true,
+                // If RtcFailure occurred then behaviour is undefined, so assert and assume open
+                error.RtcFailure => {
+                    assert(false);
+                    return false;
+                },
+            };
+            return true;
+        }
+
+        pub inline fn toOptional(pc: TPeerConnection) OptionalPeerConnection(T) {
+            return @enumFromInt(@intFromEnum(pc));
         }
 
         inline fn c(pc: TPeerConnection) u31 {
             return @intFromEnum(pc);
         }
 
-        inline fn toUserPointer(ptr: ?*anyopaque) *T {
-            return @ptrCast(@alignCast(ptr.?));
-        }
-
         inline fn fromC(pc: i32) TPeerConnection {
             return @enumFromInt(pc);
         }
 
+        inline fn toUserPointer(ptr: ?*anyopaque) *T {
+            return @ptrCast(@alignCast(ptr.?));
+        }
+
         const TPeerConnection = @This();
+    };
+}
+
+/// Channel refers to common functions used by DataChannel, Track or Websocket in the libdatachannel C-API.
+/// This isn't used directly by consumers but the logic is shared across the above data types.
+fn Channel(comptime HT: type, comptime UT: type) type {
+    return struct {
+        pub fn setOpenCallback(handle: HT, comptime callback: *const fn (handle: HT, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    return callback(self, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetOpenCallback(handle.c(), Container.api_callback));
+        }
+
+        pub fn setClosedCallback(handle: HT, comptime callback: *const fn (handle: HT, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+                    return callback(self, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetClosedCallback(handle.c(), Container.api_callback));
+        }
+
+        pub fn setMessageCallback(handle: HT, comptime callback: ?*const fn (handle: HT, message: []const u8, userdata: *UT) anyerror!void) InvalidOrRuntimeError!void {
+            const Container = struct {
+                pub fn api_callback(_id: c_int, _message: [*c]const u8, size: c_int, _userdata: ?*anyopaque) callconv(.c) void {
+                    const self: HT = .fromC(_id);
+                    const ud = toUserPointer(_userdata);
+
+                    // NOTE(jae): 2026-04-24
+                    // I'm pretty sure only WebSocket handles 'string' and 'binary' as seperate payload types.
+                    // The rule described with "rtcSetMessageCallback" is that size is negative if its a string
+                    if (size < 0) unreachable;
+
+                    const message = @as([]const u8, _message[0..@intCast(size)]);
+                    return callback.?(self, message, ud) catch |err|
+                        HT.handleErrorResult(self, err, ud);
+
+                    // NOTE(jae): 2026-04-24
+                    // I'm pretty sure only WebSocket handles 'string' and 'binary' as seperate payload types
+                    //
+                    // const payload: struct { MessageType, []const u8 } = if (size < 0)
+                    //     // If negative size then it's a string and null-terminated pointer
+                    //     .{ .string, @as([:0]const u8, _message[0..@intCast(-size) :0]) }
+                    // else
+                    //     // If positive size then it's a binary payload
+                    //     .{ .binary, @as([]const u8, _message[0..@intCast(size)]) };
+                    // return callback.?(self, payload.@"0", payload.@"1", ud) catch |err|
+                    //     handleErrorResult(self, err, ud);
+                }
+            };
+            return handleWrapError(clib.rtcSetMessageCallback(handle.c(), if (callback != null) Container.api_callback else null));
+        }
+
+        pub inline fn isOpen(handle: HT) bool {
+            return clib.rtcIsOpen(handle.c());
+        }
+
+        pub inline fn isClosed(handle: HT) bool {
+            return clib.rtcIsClosed(handle.c());
+        }
+
+        pub inline fn receiveSize(handle: HT) BufferOrNotAvailableError!u31 {
+            var size_c: c_int = undefined;
+            try handleNotAvailableWrapError(clib.rtcReceiveMessage(handle.c(), null, &size_c));
+            return @intCast(@abs(size_c));
+        }
+
+        pub inline fn receive(handle: HT, buf: []u8) BufferOrNotAvailableError![]const u8 {
+            var buf_and_res_size: c_int = @intCast(buf.len);
+            try handleNotAvailableWrapError(clib.rtcReceiveMessage(handle.c(), buf.ptr, &buf_and_res_size));
+            const message: []const u8 = if (buf_and_res_size < 0)
+                // Negative size means null-terminated pointer
+                @as([:0]const u8, buf[0..@intCast(-buf_and_res_size) :0])
+            else
+                @as([]const u8, buf[0..@intCast(buf_and_res_size)]);
+            return message;
+        }
+
+        pub inline fn send(handle: HT, buf: []const u8) InvalidOrRuntimeError!void {
+            return try handleWrapError(clib.rtcSendMessage(handle.c(), buf.ptr, @intCast(buf.len)));
+        }
+
+        inline fn toUserPointer(ptr: ?*anyopaque) *UT {
+            return @ptrCast(@alignCast(ptr.?));
+        }
     };
 }
 
@@ -1176,7 +1470,7 @@ fn handleIdWrapError(res: c_int) InvalidOrRuntimeError!u31 {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => unreachable, // RTC_ERR_TOO_SMALL
+        -4 => unreachable, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }
@@ -1189,7 +1483,7 @@ fn handleSizeWrapError(res: c_int) BufferError!u31 {
         -1 => error.RtcInvalid, // RTC_ERR_INVALID
         -2 => error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => error.BufferTooSmall, // RTC_ERR_TOO_SMALL
+        -4 => error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     };
 }
@@ -1202,7 +1496,20 @@ fn handleSizeNotAvailableWrapError(res: c_int) BufferOrNotAvailableError!u31 {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => return error.RtcNotAvailable, // RTC_ERR_NOT_AVAIL
-        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL
+        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
+        else => unreachable,
+    }
+}
+
+/// Like "handleSizeNotAvailableWrapError" but is a different API used by "rtcReceiveMessage"
+fn handleNotAvailableWrapError(res: c_int) BufferOrNotAvailableError!void {
+    if (res >= 0) return;
+
+    switch (res) {
+        -1 => return error.RtcInvalid, // RTC_ERR_INVALID
+        -2 => return error.RtcFailure, // RTC_ERR_FAILURE
+        -3 => return error.RtcNotAvailable, // RTC_ERR_NOT_AVAIL
+        -4 => return error.BufferTooSmall, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }
@@ -1214,7 +1521,7 @@ fn handleWrapError(res: c_int) InvalidOrRuntimeError!void {
         -1 => return error.RtcInvalid, // RTC_ERR_INVALID
         -2 => return error.RtcFailure, // RTC_ERR_FAILURE
         -3 => unreachable, // RTC_ERR_NOT_AVAIL
-        -4 => unreachable, // RTC_ERR_TOO_SMALL
+        -4 => unreachable, // RTC_ERR_TOO_SMALL, ie. copyAndReturn() called in capi.cpp
         else => unreachable,
     }
 }

@@ -8,24 +8,33 @@ const rtc = @import("libdatachannel");
 
 const log = @import("std").log.scoped(.capi_track);
 
+const PeerId = enum {
+    peer1,
+    peer2,
+};
+
 const Peer = struct {
+    id: PeerId,
     state: rtc.State,
     gatheringState: rtc.GatheringState,
     pc: rtc.PeerConnection(Peer),
     tr: rtc.OptionalTrack(Peer),
     connected: bool,
+    got_track_message: bool,
     other_peer: ?*Peer,
 
-    fn init(peer: *Peer, config: rtc.PeerConnectionConfig) !void {
+    fn init(peer: *Peer, id: PeerId, config: rtc.PeerConnectionConfig) !void {
         // Create peer connection
         const pc = try rtc.PeerConnection(Peer).create(peer, config);
         errdefer pc.destroy();
         peer.* = .{
+            .id = id,
             .state = .new,
             .gatheringState = .new,
             .pc = pc,
             .tr = .none,
             .connected = false,
+            .got_track_message = false,
             .other_peer = null,
         };
 
@@ -37,8 +46,12 @@ const Peer = struct {
     }
 
     fn deinit(peer: *Peer) void {
-        if (peer.tr.unwrap()) |tr| tr.close();
-        peer.pc.close();
+        if (peer.tr.unwrap()) |tr| {
+            tr.close();
+            tr.destroy();
+        }
+        peer.pc.close(); // Closes connection but does not block callbacks
+        peer.pc.destroy(); // Blocks until all callbacks occur, frees completely
     }
 };
 
@@ -47,11 +60,16 @@ const MediaDescription: [:0]const u8 = "video 9 UDP/TLS/RTP/SAVPF\r\n" ++
     "a=sendonly\r\n";
 
 test "capi track" {
+    rtc.preload();
+    defer rtc.cleanup();
+
     rtc.initLogger(.debug, rtc.defaultZigLogger);
 
     // Create peer 1
     var peer1: Peer = undefined;
-    try peer1.init(.{
+    try peer1.init(.peer1, .{
+        .port_range_begin = 5000,
+        .port_range_end = 5009,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -60,9 +78,9 @@ test "capi track" {
     defer peer1.deinit();
 
     var peer2: Peer = undefined;
-    try peer2.init(.{
-        .port_range_begin = 5000,
-        .port_range_end = 6000,
+    try peer2.init(.peer2, .{
+        .port_range_begin = 5010,
+        .port_range_end = 5019,
         // STUN server example
         // .ice_servers  = &.{
         //     "stun:stun.l.google.com:19302",
@@ -80,6 +98,7 @@ test "capi track" {
         peer1.tr = tr.toOptional();
         try tr.setOpenCallback(trackOpenCallback);
         try tr.setClosedCallback(trackClosedCallback);
+        try tr.setMessageCallback(trackMessageCallback);
         var mid_buf: [256]u8 = undefined;
         const mid = try tr.getMid(&mid_buf);
         if (!mem.containsAtLeast(u8, mid, 1, "video")) {
@@ -135,6 +154,13 @@ test "capi track" {
         while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
             attempts -= 1;
 
+            if (peer1.state == .closed or peer2.state == .closed) {
+                // If connections were closed early then stop waiting
+                // (Observed in MacOS Github Action "capi_connectivity.zig" tests)
+                log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
+                return error.PeerConnectionClosed;
+            }
+
             if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
                 // Deprecated path: Zig 0.15.X or lower
                 @import("std").Thread.sleep(250 * 1000000);
@@ -143,6 +169,7 @@ test "capi track" {
             }
         }
         if (peer1.state != .connected or peer2.state != .connected) {
+            log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
             return error.PeerConnectionIsNotConnected;
         }
         if (!peer1.connected or !peer2.connected) {
@@ -152,6 +179,40 @@ test "capi track" {
             return error.ExhaustedAttempts;
         }
     }
+
+    // TODO: Improve this in the future to send and test a real valid RTP packet.
+    //
+    // Currently gets "SRTP protect error, status=2"
+    //
+    // blk: {
+    //     const tr1 = peer1.tr.unwrap() orelse unreachable;
+    //     tr1.send("(peer 1 video data stream)") catch |err| switch (err) {
+    //         error.RtcFailure => break :blk,
+    //         else => |other_err| return other_err,
+    //     };
+    //     return error.Peer1ExpectedTrack1ToFailSending;
+    // }
+
+    // // Wait for track packet
+    // {
+    //     var attempts: u32 = 40;
+    //     while (attempts > 0 and (!peer2.got_track_message)) {
+    //         attempts -= 1;
+    //
+    //         if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
+    //             // Deprecated path: Zig 0.15.X or lower
+    //             @import("std").Thread.sleep(250 * 1000000);
+    //         } else {
+    //             try testing.io.sleep(.fromMilliseconds(250), .boot);
+    //         }
+    //     }
+    //     if (!peer2.got_track_message) {
+    //         return error.PeerConnection2HasNoTrackMessage;
+    //     }
+    //     if (attempts == 0) {
+    //         return error.ExhaustedAttempts;
+    //     }
+    // }
 }
 
 fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type: [:0]const u8, peer: *Peer) !void {
@@ -161,7 +222,7 @@ fn descriptionCallback(pc: rtc.PeerConnection(Peer), sdp: [:0]const u8, sdp_type
 }
 
 fn candidateCallback(pc: rtc.PeerConnection(Peer), candidate: [:0]const u8, mid: [:0]const u8, peer: *Peer) !void {
-    log.info("Candidate: {} - {s}", .{ pc, candidate });
+    log.info("Candidate: {} - {s}, mid: {s}, other peer: {}", .{ pc, candidate, mid, peer.other_peer.?.pc });
     const other = peer.other_peer.?;
     try other.pc.addRemoteCandidate(candidate, mid);
 }
@@ -186,6 +247,19 @@ fn trackClosedCallback(_: rtc.Track(Peer), peer: *Peer) !void {
     log.info("Track: {} - Closed", .{peer.pc});
 }
 
+fn trackMessageCallback(tr: rtc.Track(Peer), data: []const u8, peer: *Peer) !void {
+    log.info("Peer({}): Track: {} - message: {s}", .{ peer.pc, tr, data });
+    const expected_message = switch (peer.id) {
+        .peer1 => unreachable,
+        .peer2 => "(pretend its stream data)",
+    };
+    if (!mem.eql(u8, data, expected_message)) {
+        log.err("Peer({}): Track: {} - expected message '{s}' but got '{s}'", .{ peer.pc, tr, expected_message, data });
+        return error.InvalidTrackMessageFromCallback;
+    }
+    peer.got_track_message = true;
+}
+
 fn trackCallback(_: rtc.PeerConnection(Peer), tr: rtc.Track(Peer), peer: *Peer) !void {
     var mid_buf: [256]u8 = undefined;
     const mid = try tr.getMid(&mid_buf);
@@ -208,4 +282,5 @@ fn trackCallback(_: rtc.PeerConnection(Peer), tr: rtc.Track(Peer), peer: *Peer) 
     peer.tr = tr.toOptional();
     try tr.setOpenCallback(trackOpenCallback);
     try tr.setClosedCallback(trackClosedCallback);
+    try tr.setMessageCallback(trackMessageCallback);
 }

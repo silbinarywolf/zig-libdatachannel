@@ -12,8 +12,8 @@
         // - libsrtp (as submodule by default) required if compiled with media support.
         // - nlohmann JSON (as submodule by default) required to build examples.
         .libdatachannel_cpp = .{
-            .url = "git+https://github.com/paullouisageneau/libdatachannel#082f2dacabe82c1ef970ba38e596aeb454ea1372",
-            .hash = "N-V-__8AAPcmOAMvwMkbynYXuLPXyHwpDyPDxmrXRdeFk8fu",
+            .url = "git+https://github.com/paullouisageneau/libdatachannel#bb5e11a122b0020baab9bd67056ed978b3d543fc",
+            .hash = "N-V-__8AAI4jOQMtuHI79PVZ4zU7KFUuF0si3v1egVSD8nuI",
         },
         .libdatachannel_wasm = .{
             .url = "git+https://github.com/paullouisageneau/datachannel-wasm#v0.4.0",
@@ -46,11 +46,14 @@
             .hash = "N-V-__8AAC2JdgGk1QZ0JtMgz66B5s5rzNjQkloMXFw-jo86",
             .lazy = true,
         },
-        .openssl = .{
-            .url = "git+https://github.com/openssl/openssl#openssl-3.6.1",
-            .hash = "N-V-__8AAAv1CAhJkqQc7qnRDObIF2Pu-e8GVTOPDGSkn-9s",
-            .lazy = true,
-        },
+        // NOTE(jae): 2026-04-25
+        // The Openssl-Zig repo does not work as of this commit as it's not including a few relied upon
+        // C files: https://github.com/kassane/openssl-zig/commits/zig-pkg/41cd1e69926ff97732ee30efa5833029f1b39897
+        // .openssl = .{
+        //     .url = "git+https://github.com/kassane/openssl-zig#41cd1e69926ff97732ee30efa5833029f1b39897",
+        //     .hash = "openssl-3.6.0-wZcA72dm8QEEc7oadIq7LkStu7kvDY-PYQdaTRNNt9LP",
+        //     .lazy = true,
+        // },
     },
     .paths = .{
         "LICENSE",

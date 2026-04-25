@@ -5,6 +5,7 @@ const testing = @import("std").testing;
 const rtc = @import("libdatachannel");
 
 comptime {
+    _ = @import("capi_connectivity.zig");
     _ = @import("capi_track.zig");
     _ = @import("zig_binding.zig");
 }
