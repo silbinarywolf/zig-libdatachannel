@@ -332,7 +332,7 @@ pub const IceState = enum(u3) {
 };
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/signalingState
-pub const SignalingState = enum(u8) {
+pub const SignalingState = enum(u7) {
     /// There is no ongoing exchange of offer and answer underway. This may mean that the RTCPeerConnection
     /// object is new, in which case both the localDescription and remoteDescription are null;
     ///
@@ -350,7 +350,7 @@ pub const SignalingState = enum(u8) {
     have_remote_pranswer = 4,
     /// Invalid value, not provided by C-API in libdatachannel but allows for storing uninitialized state
     /// on a consumer struct easier.
-    unknown = 255,
+    unknown = maxInt(u7),
 
     inline fn c(state: SignalingState) u8 {
         return @intFromEnum(state);
@@ -366,7 +366,7 @@ pub const SignalingState = enum(u8) {
         assert(SignalingState.have_remote_offer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_OFFER);
         assert(SignalingState.have_local_pranswer.c() == clib.RTC_SIGNALING_HAVE_LOCAL_PRANSWER);
         assert(SignalingState.have_remote_pranswer.c() == clib.RTC_SIGNALING_HAVE_REMOTE_PRANSWER);
-        assert(SignalingState.unknown.c() == 255); // No mapping to RTC
+        assert(SignalingState.unknown.c() == maxInt(u7)); // No mapping to RTC
     }
 };
 
