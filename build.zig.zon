@@ -47,8 +47,8 @@
             .lazy = true,
         },
         .openssl = .{
-            .url = "git+https://github.com/openssl/openssl#openssl-3.6.1",
-            .hash = "N-V-__8AAAv1CAhJkqQc7qnRDObIF2Pu-e8GVTOPDGSkn-9s",
+            .url = "git+https://github.com/kassane/openssl-zig#41cd1e69926ff97732ee30efa5833029f1b39897",
+            .hash = "openssl-3.6.0-wZcA72dm8QEEc7oadIq7LkStu7kvDY-PYQdaTRNNt9LP",
             .lazy = true,
         },
     },

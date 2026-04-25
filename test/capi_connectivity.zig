@@ -53,12 +53,19 @@ const Peer = struct {
     }
 
     fn deinit(peer: *Peer) void {
-        if (peer.dc.unwrap()) |dc| dc.close();
-        peer.pc.close();
+        if (peer.dc.unwrap()) |dc| {
+            dc.close();
+            dc.destroy();
+        }
+        peer.pc.close(); // Closes connection but does not block callbacks
+        peer.pc.destroy(); // Blocks until all callbacks occur, frees completely
     }
 };
 
 test "capi connectivity" {
+    rtc.preload();
+    defer rtc.cleanup();
+
     const gpa = testing.allocator;
 
     // SDP buffers can be much greater than 4096 bytes as used in the capi_connectivity.cpp file
@@ -121,6 +128,13 @@ test "capi connectivity" {
         while (attempts > 0 and (!peer1.connected or !peer2.connected)) {
             attempts -= 1;
 
+            if (peer1.state == .closed or peer2.state == .closed) {
+                // If connections were closed early then stop waiting
+                // (Observed in MacOS Github Action tests)
+                log.err("peer 1 state: {t}, peer 2 state: {t}", .{ peer1.state, peer2.state });
+                return error.PeerConnectionClosed;
+            }
+
             if (builtin.zig_version.major == 0 and builtin.zig_version.minor <= 15) {
                 // Deprecated path: Zig 0.15.X or lower
                 @import("std").Thread.sleep(250 * 1000000);
@@ -135,6 +149,7 @@ test "capi connectivity" {
         if ((peer1.ice_state != .connected and peer1.ice_state != .completed) or
             (peer2.ice_state != .connected and peer2.ice_state != .completed))
         {
+            log.err("peer 1 ice state: {t}, peer 2 ice state: {t}", .{ peer1.ice_state, peer2.ice_state });
             return error.PeerConnectionIceStateIsNotConnected;
         }
         if (!peer1.connected or !peer2.connected) {

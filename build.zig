@@ -480,10 +480,10 @@ pub fn build(b: *std.Build) !void {
         if (linkage == .static) {
             mod.addCMacro("JUICE_STATIC", "1");
         }
-        // if (target.result.os.tag.isDarwin()) {
-        //     // Configured for MacOS builds of libjuice in Github CI for libjuice
-        //     mod.addCMacro("JUICE_ENABLE_LOCAL_ADDRESS_TRANSLATION", "1");
-        // }
+        if (target.result.os.tag.isDarwin()) {
+            // Configured for MacOS builds of libjuice in Github CI for libjuice
+            mod.addCMacro("JUICE_ENABLE_LOCAL_ADDRESS_TRANSLATION", "1");
+        }
         mod.addIncludePath(libjuice_path.path(b, "include/juice"));
         const lib = b.addLibrary(.{
             .name = "libjuice",

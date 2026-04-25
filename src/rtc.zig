@@ -670,7 +670,7 @@ pub fn DataChannel(comptime T: type) type {
         /// This function will block until all scheduled callbacks return
         /// (except the one this function might be called in) and no other callback will be called after it returns.
         pub inline fn destroy(dc: CDataChannel) void {
-            return handleWrapError(clib.rtcDeleteTrack(dc.c())) catch |err| switch (err) {
+            return handleWrapError(clib.rtcDeleteDataChannel(dc.c())) catch |err| switch (err) {
                 error.RtcInvalid => {
                     if (builtin.mode == .Debug)
                         panic("Invalid data channel id given: {}", .{dc});
